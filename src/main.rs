@@ -1,5 +1,7 @@
 use std::io;
 use std::io::Write;
+use std::io::Read;
+use std::fs::File;
 use std::process::exit;
 
 #[derive(Debug)]
@@ -23,6 +25,74 @@ enum Token {
     OP(OpType),
     INT(i32),
     STR(String),
+}
+
+#[derive(Debug)]
+enum ColType {
+    INT,
+    STR,
+    COUNT,
+}
+
+#[derive(Debug)]
+struct TableSchema {
+    name: String,
+    cols: Vec<(String, ColType)>,
+}
+
+fn try_parse_col_type(col_type: &str) -> Option<ColType> {
+    assert_eq!(ColType::COUNT as u8, 2);
+    match col_type {
+        "INT" => Some(ColType::INT),
+        "STR" => Some(ColType::STR),
+        _ => None,
+    }
+} 
+
+fn parse_table_schema(file_path: &str) -> TableSchema {
+    let mut file = File::open(file_path).unwrap_or_else(|err| {
+        eprintln!("ERROR: unable to open the file {file_path}: {err}");
+        exit(1);
+    });
+
+    let mut content = String::new();
+    file.read_to_string(&mut content).unwrap_or_else(|err| {
+        eprintln!("ERROR: unable to read from the file {file_path}: {err}");
+        exit(1);
+    });
+
+    let mut cols = vec![];
+    let mut lines = content.lines();
+    let name = lines.next().unwrap_or_else(|| {
+        eprintln!("ERROR: table name not provided in a file {file_path}");
+        exit(1);
+    }).to_string();
+
+    if name.contains(":") {
+        eprintln!("ERROR: table name can't contain a ':': {file_path}");
+        exit(1);
+    }
+
+    for (i, line) in lines.enumerate() {
+        let (name, type_name) = line.split_once(':').unwrap_or_else(|| {
+            eprintln!("ERROR: invalid format for column at line {i} in a file {file_path}");
+            exit(1);
+        });
+
+        if name.len() == 0 {
+            eprintln!("ERROR: empty column name at line {i} in a file {file_path}");
+            exit(1);
+        }
+
+        if let Some(value) = try_parse_col_type(type_name) {
+            cols.push((String::from(name), value));
+        } else {
+            eprintln!("ERROR: unknown column type at line {i} in a file {file_path}");
+            exit(1);
+        } 
+    }
+
+    TableSchema { name, cols }
 }
 
 fn try_parse_op(op: &str) -> Option<OpType> {
@@ -144,7 +214,10 @@ fn main() {
         Row { id: 2, name: String::from("Vladimir"), age: 19},
     ];
 
-    let mut quit = false;
+    let schema = parse_table_schema("./stuff.tbls");
+    println!("{schema:?}");
+
+    let mut quit = true;
     while !quit {
         print!("> "); 
         io::stdout().flush().unwrap_or_else(|err| {
