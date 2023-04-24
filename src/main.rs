@@ -4,20 +4,25 @@ use std::io::Read;
 use std::fs::File;
 use std::process::exit;
 
-#[derive(Debug)]
-struct Row {
-    id: i32,
+#[derive(Debug, Clone)]
+struct TableSchema {
     name: String,
-    age: i32,
+    cols: Vec<(String, ColType)>,
 }
 
-type Table = Vec<Row>;
+// TODO: think about redisign of token system
+type Row = Vec<Token>;
+struct Table {
+    schema: TableSchema,
+    rows: Vec<Row>,
+}
 
 #[derive(Debug, PartialEq, Clone)]
 enum OpType {
     SELECT,
     INSERT,
     DELETE,
+    CLEAR,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -27,17 +32,20 @@ enum Token {
     STR(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum ColType {
     INT,
     STR,
     COUNT,
 }
 
-#[derive(Debug)]
-struct TableSchema {
-    name: String,
-    cols: Vec<(String, ColType)>,
+fn cmp_token_with_col(token: &Token, col_type: ColType) -> bool {
+    assert_eq!(ColType::COUNT as u8, 2);
+    match token {
+        Token::INT(_) => return col_type == ColType::INT,
+        Token::STR(_) => return col_type == ColType::STR,
+        _ => unreachable!(),
+    } 
 }
 
 fn try_parse_col_type(col_type: &str) -> Option<ColType> {
@@ -100,6 +108,7 @@ fn try_parse_op(op: &str) -> Option<OpType> {
         "select" => Some(OpType::SELECT),
         "insert" => Some(OpType::INSERT),
         "delete" => Some(OpType::DELETE),
+        "clear"  => Some(OpType::CLEAR),
         _ => None,  
     }
 }
@@ -125,81 +134,106 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
             Token::OP(op) => {
                 match op {
                     OpType::SELECT => {
-                        for row in &mut *table {
-                            for token in &tokens {
-                                match token {
-                                    Token::STR(_) => continue,
-                                    _ => {
-                                        eprintln!("ERROR: `select` operation can operate only strings");
-                                        return;
+                        let mut row_idxs = vec![];
+                        'outer: for token in &tokens {
+                            match token {
+                                Token::STR(value) => {
+                                    if value == "*" {
+                                        row_idxs.append(&mut (0..table.schema.cols.len()).collect::<Vec<usize>>());
+                                        continue 'outer;
                                     }
+
+                                    for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
+                                        if col_name == value {
+                                            row_idxs.push(i);
+                                            continue 'outer;
+                                        }
+                                    }
+                                    eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, table.schema.name);
+                                    return;
+                                },
+                                _ => {
+                                    eprintln!("ERROR: `select` operation can operate only strings");
+                                    return;
                                 }
                             }
-                            
-                            for token in &tokens {
-                                if let Token::STR(value) = token {
-                                    match value.as_str() {
-                                        "id" => print!("{0:>5} ", row.id),
-                                        "name" => print!("{0:>15}", row.name),
-                                        "age" => print!("{0:>5}", row.age),
-                                        _ => unreachable!(),
-                                    }
-                                } else {
-                                    unreachable!();
+                        }
+
+                        for row in &table.rows {
+                            for idx in &row_idxs {
+                                match &row[*idx as usize] {
+                                    Token::INT(value) => print!("{value:>5}"),
+                                    Token::STR(value) => print!("{value:>20}"),
+                                    _ => unreachable!(),
                                 }
                             }
-                            println!("");
-                        } 
-                        tokens.clear();
+                            println!();
+                        }
                     },
                     OpType::INSERT => {
-                        if tokens.len() < 3 {
-                            eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed 3", tokens.len());
+                        let col_count = table.schema.cols.len(); 
+                        if tokens.len() < col_count {
+                            eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", tokens.len(), col_count);
                             return;
                         }
 
-                        table.push(Row {
-                            id: if let Token::INT(id) = tokens[0] { id } else { 
-                                eprintln!("ERROR: invalid arguments type for `insert` operation");
-                                return;
-                            },
-                            name: if let Token::STR(name) = &tokens[1] { String::from(name) } else { 
-                                eprintln!("ERROR: invalid arguments type for `insert` operation");
-                                return;
-                            },
-                            age: if let Token::INT(age) = tokens[2] { age } else { 
-                                eprintln!("ERROR: invalid arguments type for `insert` operation");
-                                return;
-                            },
-                        });
-
-                        tokens.clear();
-                    },
-                    OpType::DELETE => {
-                        if tokens.len() < 1 {
-                            eprintln!("ERROR: not enaugh arguments for `delete` operation, provided 0 but needed 1");
-                            return;
-                        }
-
-                        match tokens.pop().unwrap() {
-                            Token::INT(id) => {
-                                let mut rows_for_delete = vec![];
-                                for (i, row) in table.iter().enumerate() {
-                                    if row.id == id {
-                                        rows_for_delete.push(i);
-                                    }
-                                }
-
-                                for row in rows_for_delete {
-                                    table.remove(row);
-                                } 
-                            },
-                            other => {
-                                eprintln!("ERROR: invalid argument type for `delete` operation, expected to be an integer but provided {other:?}");
+                        for (i, token) in tokens[tokens.len() - col_count..tokens.len()].iter().enumerate() {
+                            if !cmp_token_with_col(token, table.schema.cols[i].1) {
+                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", token, table.schema.cols[i].1);
                                 return;
                             }
                         }
-                    }
+
+                        table.rows.push(tokens[tokens.len() - col_count..tokens.len()].to_vec());
+                    },
+                    OpType::DELETE => {
+                        if tokens.len() < 2 {
+                            eprintln!("ERROR: not enaugh arguments for `delete` operation, provided {0} but needed 2", tokens.len());
+                            return;
+                        }
+
+                        let value_token = tokens.pop().unwrap();
+                        let target_token = tokens.pop().unwrap();
+                        let mut idx = -1;
+                        match target_token {
+                            Token::STR(value_token) => {
+                                for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
+                                    if *col_name == value_token {
+                                        idx = i as i32;
+                                        break;
+                                    }
+                                }
+                                
+                                if idx < 0 {
+                                    eprintln!("ERROR: no such column `{0}` in table `{1}`", value_token, table.schema.name);
+                                    return;
+                                }
+                            },
+                            _ => {
+                                eprintln!("ERROR: first argument for `delete` operation must be a string but provided {0:?}", target_token);
+                                return;
+                            }
+                        }        
+
+                        if !cmp_token_with_col(&value_token, table.schema.cols[idx as usize].1) {
+                            eprintln!("ERROR: value_token for compare that was provided for `delete` operation has type {0:?} but column {1} has type {2:?}", value_token, table.schema.cols[idx as usize].0, table.schema.cols[idx as usize].1);
+                            return;
+                        }
+
+                        let mut rows_to_delete = vec![];
+                        for (i, row) in table.rows.iter().enumerate() {
+                            if value_token == row[idx as usize] {
+                                rows_to_delete.push(i); 
+                            }
+                        }
+
+                        let mut deleted = 0;
+                        for row in rows_to_delete {
+                            table.rows.remove(row - deleted);
+                            deleted += 1;
+                        }       
+                    },
+                    OpType::CLEAR => tokens.clear(),
                 }
             },
             _ => tokens.push(token.clone()),
@@ -208,16 +242,13 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
 }
 
 fn main() {
-    let mut table: Vec<Row> = vec![
-        Row { id: 0, name: String::from("John"), age: 28},
-        Row { id: 1, name: String::from("Alexey"), age: 20},
-        Row { id: 2, name: String::from("Vladimir"), age: 19},
-    ];
-
     let schema = parse_table_schema("./stuff.tbls");
-    println!("{schema:?}");
+    let mut table = Table {
+       schema: schema.clone(),
+       rows: vec![],
+    };
 
-    let mut quit = true;
+    let mut quit = false;
     while !quit {
         print!("> "); 
         io::stdout().flush().unwrap_or_else(|err| {
@@ -232,6 +263,9 @@ fn main() {
         });
         buffer.pop();
 
+        // TODO: Add the command history
+        // TODO: Make `querry` command put user in a `querry mode` (not to write every time in front of a querry)
+        // TODO: Trim command and tokens before parsing
         let command = buffer.as_str().split(' ').next().unwrap();
         match command {
             "exit" => quit = true,
@@ -243,11 +277,10 @@ fn main() {
                 
                 let (_, querry) = buffer.split_once(' ').unwrap();
                 let tokens = parse_querry(querry);
-                println!("provided querry: {:?}", tokens);
                 evaluate_querry(&tokens, &mut table);
             },
             "" => (),
-            _ => println!("Unknown command: {buffer}"),
+            _ => println!("Unknown command: {command}"),
         }
     }
 }
