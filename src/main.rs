@@ -118,7 +118,7 @@ fn try_parse_op(op: &str) -> Option<OpType> {
 
 fn parse_querry(querry: &str) -> Vec<Token> {
     let mut tokens: Vec<Token> = vec![];
-    for word in querry.split(' ') {
+    for word in querry.split_ascii_whitespace() {
         if let Some(op) = try_parse_op(word) {
             tokens.push(Token::OP(op)); 
         } else if let Ok(value) = word.parse::<i32>() {
@@ -331,6 +331,7 @@ fn save_to_file(table: Table) {
     }
 }
 
+// TODO: Make some tests
 fn main() {
     let file_path = "./stuff.tbls";
     let schema = parse_table_schema(file_path);
@@ -363,7 +364,6 @@ fn main() {
         buffer.pop();
 
         // TODO: Add the command history
-        // TODO: Trim command and tokens before parsing
         if querry_mode {
             match buffer.as_str() {
                 "exit" => querry_mode = false,
@@ -376,7 +376,7 @@ fn main() {
             continue;
         } 
         
-        let command = buffer.as_str().split(' ').next().unwrap();
+        let command = buffer.as_str().trim_start().split(' ').next().unwrap();
         match command {
             "exit" => quit = true,
             "querry" => querry_mode = true,
