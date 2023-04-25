@@ -2,6 +2,7 @@ use std::io;
 use std::io::Write;
 use std::io::Read;
 use std::fs::File;
+use std::fs;
 use std::process::exit;
 
 #[derive(Debug, Clone)]
@@ -241,12 +242,102 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
     }
 }
 
+fn read_from_file(table: &mut Table) {
+    let file_path = format!("{0}.tbl", table.schema.name);
+    let mut file = File::open(&file_path).unwrap_or_else(|err| {
+        eprintln!("ERROR: unable to open the file {file_path}: {err}");
+        exit(1);
+    });
+
+    let mut row_len = 0;
+    for (_, col_type) in &table.schema.cols {
+        match col_type {
+            ColType::INT => row_len += 4,
+            ColType::STR => row_len += 50,
+            _ => unreachable!(),
+        }
+    }
+    
+    let file_len = fs::metadata(&file_path).unwrap_or_else(|err| {
+        eprintln!("ERROR: can't get size of the file {file_path}: {err}");
+        exit(1); 
+    }).len();
+    
+    if file_len % row_len != 0 {
+        eprintln!("ERROR: incorrect file format in {file_path}");
+        exit(1);
+    }
+
+    let mut i32_buf: [u8; 4] = [0; 4];
+    let mut str_buf: [u8; 50] = [0; 50];
+    for _ in 0..file_len / row_len {
+        let mut row: Row = vec![];
+        for (_, col_type) in &table.schema.cols {
+            match col_type {
+                ColType::INT => {
+                    file.read(&mut i32_buf).unwrap_or_else(|err| {
+                        eprintln!("ERROR: unable to read from file {file_path}: {err}");
+                        exit(1);
+                    });
+                    
+                    row.push(Token::INT(i32::from_ne_bytes(i32_buf)));
+                },
+                ColType::STR => {
+                    file.read(&mut str_buf).unwrap_or_else(|err| {
+                        eprintln!("ERROR: unable to read from file {file_path}: {err}");
+                        exit(1);
+                    });
+                    
+                    let str_len = str_buf.iter().position(|&x| x == 0).unwrap_or(50);
+                    row.push(Token::STR(String::from_utf8_lossy(&str_buf[0..str_len]).to_string()));
+                },
+                _ => unreachable!(),
+            }
+        }
+        table.rows.push(row);
+    }  
+}
+
+fn save_to_file(table: Table) {
+    let file_path = format!("{0}.tbl", table.schema.name);
+    let mut file = File::create(&file_path).unwrap_or_else(|err| {
+        eprintln!("ERROR: unable to create a file for table: {err}");
+        exit(1);
+    });
+    
+    for row in &table.rows {
+        for token in row {
+            match token {
+                Token::INT(value) => {
+                    file.write_all(&value.to_ne_bytes()).unwrap_or_else(|err| {
+                        eprintln!("ERROR: unable to write to the file {file_path}: {err}");
+                        exit(1);
+                    });     
+                },
+                Token::STR(value) => {
+                    assert!(value.len() <= 50, "ERROR: string literals can't be longer then 50 characters");
+                    let mut str_buf: [u8; 50] = [0; 50];
+                    str_buf[0..value.len()].clone_from_slice(&value.as_bytes());
+                    file.write_all(&str_buf).unwrap_or_else(|err| {
+                        eprintln!("ERROR: unable to write to the file {file_path}: {err}");
+                        exit(1);
+                    });     
+                },
+                _ => unreachable!(),
+            }
+        } 
+    }
+}
+
 fn main() {
-    let schema = parse_table_schema("./stuff.tbls");
+    let file_path = "./stuff.tbls";
+    let schema = parse_table_schema(file_path);
     let mut table = Table {
        schema: schema.clone(),
        rows: vec![],
     };
+
+    read_from_file(&mut table);
 
     let mut quit = false;
     while !quit {
@@ -283,4 +374,6 @@ fn main() {
             _ => println!("Unknown command: {command}"),
         }
     }
+
+    save_to_file(table);
 }
