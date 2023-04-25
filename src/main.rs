@@ -13,6 +13,8 @@ struct TableSchema {
 
 // TODO: think about redisign of token system
 type Row = Vec<Token>;
+
+#[derive(Debug)]
 struct Table {
     schema: TableSchema,
     rows: Vec<Row>,
@@ -340,8 +342,14 @@ fn main() {
     read_from_file(&mut table);
 
     let mut quit = false;
+    let mut querry_mode = false;
     while !quit {
-        print!("> "); 
+        if querry_mode { 
+            print!("querry > "); 
+        } else { 
+            print!("> "); 
+        }
+        
         io::stdout().flush().unwrap_or_else(|err| {
             eprintln!("ERROR: unable to flush stdout: {err}");
             exit(1);
@@ -355,21 +363,23 @@ fn main() {
         buffer.pop();
 
         // TODO: Add the command history
-        // TODO: Make `querry` command put user in a `querry mode` (not to write every time in front of a querry)
         // TODO: Trim command and tokens before parsing
+        if querry_mode {
+            match buffer.as_str() {
+                "exit" => querry_mode = false,
+                "" => (),
+                _ => {
+                    let tokens = parse_querry(buffer.as_str());
+                    evaluate_querry(&tokens, &mut table);
+                },
+            }
+            continue;
+        } 
+        
         let command = buffer.as_str().split(' ').next().unwrap();
         match command {
             "exit" => quit = true,
-            "querry" => {
-                if buffer.trim() == "querry" {
-                    eprintln!("ERROR: querry is not provided");
-                    continue;    
-                }
-                
-                let (_, querry) = buffer.split_once(' ').unwrap();
-                let tokens = parse_querry(querry);
-                evaluate_querry(&tokens, &mut table);
-            },
+            "querry" => querry_mode = true,
             "" => (),
             _ => println!("Unknown command: {command}"),
         }
