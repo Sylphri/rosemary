@@ -377,12 +377,12 @@ fn main() {
         // TODO: Add the command history
         match mode {
             Mode::Cmd => {
-                let command = buffer.as_str().trim_start().split_ascii_whitespace().next().unwrap();
+                let command = buffer.as_str().split_ascii_whitespace().next();
                 match command {
-                    "exit" => quit = true,
-                    "querry" => mode = Mode::Query,
-                    "" => (),
-                    _ => println!("Unknown command: {command}"),
+                    Some("exit") => quit = true,
+                    Some("querry") => mode = Mode::Query,
+                    None => (),
+                    Some(value) => println!("Unknown command: {value}"),
                 }
             },
             Mode::Query | Mode::MlQuery => {
