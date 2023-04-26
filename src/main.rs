@@ -25,9 +25,9 @@ enum OpType {
     Select,
     Insert,
     Delete,
-    Clear,
 }
 
+// TODO: Introduce a sized string type
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
     Op(OpType),
@@ -60,6 +60,7 @@ fn try_parse_col_type(col_type: &str) -> Option<ColType> {
     }
 } 
 
+// TODO: make sure that schema contains only columns with unique names
 fn parse_table_schema(file_path: &str) -> TableSchema {
     let mut file = File::open(file_path).unwrap_or_else(|err| {
         eprintln!("ERROR: unable to open the file {file_path}: {err}");
@@ -111,7 +112,6 @@ fn try_parse_op(op: &str) -> Option<OpType> {
         "select" => Some(OpType::Select),
         "insert" => Some(OpType::Insert),
         "delete" => Some(OpType::Delete),
-        "clear"  => Some(OpType::Clear),
         _ => None,  
     }
 }
@@ -130,8 +130,16 @@ fn parse_querry(querry: &str) -> Vec<Token> {
     tokens
 }
 
-fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
+fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
     let mut tokens: Vec<Token> = vec![];
+    let mut temp_table = Table {
+        schema: TableSchema {
+            name: String::from("temp"),
+            cols: vec![],
+        },
+        rows: vec![],
+    };
+    
     for token in querry {
         match token {
             Token::Op(op) => {
@@ -143,7 +151,7 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                                 Token::Str(value) => {
                                     if value == "*" {
                                         row_idxs.append(&mut (0..table.schema.cols.len()).collect::<Vec<usize>>());
-                                        continue 'outer;
+                                        continue;
                                     }
 
                                     for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
@@ -153,46 +161,62 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                                         }
                                     }
                                     eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, table.schema.name);
-                                    return;
+                                    return None;
                                 },
                                 _ => {
                                     eprintln!("ERROR: `select` operation can operate only strings");
-                                    return;
+                                    return None;
                                 }
                             }
                         }
 
+                        let mut schema = TableSchema {
+                            name: String::from("temp"),
+                            cols: vec![],
+                        };
+                        
+                        for idx in &row_idxs {
+                            schema.cols.push(table.schema.cols[*idx].clone());
+                        }
+
+                        temp_table = Table {
+                            schema,
+                            rows: vec![],
+                        };
+
                         for row in &table.rows {
+                            let mut temp_row = vec![];
                             for idx in &row_idxs {
                                 match &row[*idx as usize] {
-                                    Token::Int(value) => print!("{value:>5}"),
-                                    Token::Str(value) => print!("{value:>20}"),
-                                    _ => unreachable!(),
+                                    Token::Op(_) => unreachable!("Operation tokens can't be here. Probably some bug in evaluation"),
+                                    other => temp_row.push(other.clone()),
                                 }
                             }
-                            println!();
+                            temp_table.rows.push(temp_row);
                         }
+                        tokens.clear();
                     },
                     OpType::Insert => {
                         let col_count = table.schema.cols.len(); 
                         if tokens.len() < col_count {
                             eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", tokens.len(), col_count);
-                            return;
+                            return None;
                         }
 
                         for (i, token) in tokens[tokens.len() - col_count..tokens.len()].iter().enumerate() {
                             if !cmp_token_with_col(token, table.schema.cols[i].1) {
                                 eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", token, table.schema.cols[i].1);
-                                return;
+                                return None;
                             }
                         }
 
                         table.rows.push(tokens[tokens.len() - col_count..tokens.len()].to_vec());
+                        tokens.clear();
                     },
                     OpType::Delete => {
                         if tokens.len() < 2 {
                             eprintln!("ERROR: not enaugh arguments for `delete` operation, provided {0} but needed 2", tokens.len());
-                            return;
+                            return None;
                         }
 
                         let value_token = tokens.pop().unwrap();
@@ -209,18 +233,18 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                                 
                                 if idx < 0 {
                                     eprintln!("ERROR: no such column `{0}` in table `{1}`", value_token, table.schema.name);
-                                    return;
+                                    return None;
                                 }
                             },
                             _ => {
                                 eprintln!("ERROR: first argument for `delete` operation must be a string but provided {0:?}", target_token);
-                                return;
+                                return None;
                             }
                         }        
 
                         if !cmp_token_with_col(&value_token, table.schema.cols[idx as usize].1) {
                             eprintln!("ERROR: value_token for compare that was provided for `delete` operation has type {0:?} but column {1} has type {2:?}", value_token, table.schema.cols[idx as usize].0, table.schema.cols[idx as usize].1);
-                            return;
+                            return None;
                         }
 
                         let mut rows_to_delete = vec![];
@@ -235,17 +259,19 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                             table.rows.remove(row - deleted);
                             deleted += 1;
                         }       
+                        tokens.clear();
                     },
-                    OpType::Clear => tokens.clear(),
                 }
             },
             _ => tokens.push(token.clone()),
         }
     }
+
+    Some(temp_table)
 }
 
 fn read_from_file(table: &mut Table) {
-    let file_path = format!("{0}.tbl", table.schema.name);
+    let file_path = format!("./tables/{0}.tbl", table.schema.name);
     let mut file = File::open(&file_path).unwrap_or_else(|err| {
         eprintln!("ERROR: unable to open the file {file_path}: {err}");
         exit(1);
@@ -301,7 +327,7 @@ fn read_from_file(table: &mut Table) {
 }
 
 fn save_to_file(table: Table) {
-    let file_path = format!("{0}.tbl", table.schema.name);
+    let file_path = format!("./tables/{0}.tbl", table.schema.name);
     let mut file = File::create(&file_path).unwrap_or_else(|err| {
         eprintln!("ERROR: unable to create a file for table: {err}");
         exit(1);
@@ -344,7 +370,7 @@ enum Mode {
 
 // TODO: Make some tests
 fn main() {
-    let file_path = "./stuff.tbls";
+    let file_path = "./tables/stuff.tbls";
     let schema = parse_table_schema(file_path);
     let mut table = Table {
        schema: schema.clone(),
@@ -404,7 +430,20 @@ fn main() {
                     "exit" => mode = Mode::Cmd,
                     _ => {
                         let tokens = parse_querry(query.as_str());
-                        evaluate_querry(&tokens, &mut table);
+                        let result_table = evaluate_querry(&tokens, &mut table);
+                        // TODO: implement Display trait for Table
+                        if let Some(table) = result_table {
+                            for row in table.rows {
+                                for token in row {
+                                    match token {
+                                        Token::Int(value) => print!("{value:>5}"),
+                                        Token::Str(value) => print!("{value:>20}"),
+                                        _ => unreachable!(),
+                                    }
+                                }
+                                println!();
+                            }
+                        }
                     },
                 }
                 query.clear();
