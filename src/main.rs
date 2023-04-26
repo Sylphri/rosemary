@@ -25,6 +25,9 @@ enum OpType {
     Select,
     Insert,
     Delete,
+    Filter,
+    Equal,
+    Count,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -112,10 +115,13 @@ fn parse_table_schema(file_path: &str) -> TableSchema {
 }
 
 fn try_parse_op(op: &str) -> Option<OpType> {
+    assert!(OpType::Count as u8 == 5, "Exhaustive OpType handling in try_parse_op()");
     match op {
         "select" => Some(OpType::Select),
         "insert" => Some(OpType::Insert),
         "delete" => Some(OpType::Delete),
+        "filter" => Some(OpType::Filter),
+        "==" => Some(OpType::Equal),
         _ => None,  
     }
 }
@@ -134,8 +140,16 @@ fn parse_querry(querry: &str) -> Vec<Token> {
     tokens
 }
 
+#[derive(Debug)]
+struct Condition {
+    idx: usize,
+    value: WordType,
+    op: OpType,
+}
+
 fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
     let mut words: Vec<WordType> = vec![];
+    let mut conditions: Vec<Condition> = vec![];
     let mut temp_table = Table {
         schema: TableSchema {
             name: String::from("temp"),
@@ -262,6 +276,89 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         }       
                         words.clear();
                     },
+                    OpType::Filter => {
+                        let mut filtered_rows = vec![];
+                        for row in &temp_table.rows {
+                            let mut filtered = false;
+                            for condition in &conditions {
+                                assert!(OpType::Count as u8 == 5, "Exhaustive logic OpTypes handling");
+                                match condition.op {
+                                    OpType::Equal => {
+                                        match &row[condition.idx] {
+                                            WordType::Int(value) => {
+                                                if let WordType::Int(cond_value) = &condition.value {
+                                                    if *value != *cond_value {
+                                                        filtered = true;
+                                                        break;
+                                                    }      
+                                                } else {
+                                                    unreachable!();
+                                                }
+                                            },
+                                            WordType::Str(value) => {
+                                                if let WordType::Str(cond_value) = &condition.value {
+                                                    if *value != *cond_value {
+                                                        filtered = true;
+                                                        break;
+                                                    }      
+                                                } else {
+                                                    unreachable!();
+                                                }
+                                            }
+                                        }
+                                    },
+                                    _ => unreachable!(),
+                                } 
+                            }
+
+                            if !filtered {
+                                filtered_rows.push(row.clone());
+                            }
+                        }
+
+                        temp_table.rows = filtered_rows; 
+                    },
+                    OpType::Equal => {
+                        if words.len() < 2 {
+                            eprintln!("ERROR: not enaugh arguments for `==` operation, provided {0} but needed 2", words.len());
+                            return None;
+                        }
+                        
+                        let mut col = String::new();
+                        match &words[words.len() - 2] {
+                            WordType::Str(value) => col = value.clone(),
+                            _ => {
+                                eprintln!("ERROR: invalid argument for `==` operation, expected string but found {0:?}", col);
+                                return None;
+                            },
+                        }
+
+                        let mut idx = -1;
+                        for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
+                            if *col_name == col {
+                                idx = i as i32;
+                                break;
+                            }
+                        }
+
+                        if idx < 0 {
+                            eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
+                            return None;
+                        }
+
+                        let value = &words[words.len() - 1];
+                        if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
+                            eprintln!("ERROR: invalid argument for `==` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
+                            return None;
+                        }
+                        
+                        conditions.push(Condition {
+                            idx: idx as usize,
+                            value: value.clone(),
+                            op: OpType::Equal,
+                        });
+                    },
+                    OpType::Count => unreachable!(),
                 }
             },
             Token::Word(word) => words.push(word.clone()),
@@ -406,7 +503,7 @@ fn main() {
                 let command = buffer.as_str().split_ascii_whitespace().next();
                 match command {
                     Some("exit") => quit = true,
-                    Some("querry") => mode = Mode::Query,
+                    Some("query") => mode = Mode::Query,
                     None => (),
                     Some(value) => println!("Unknown command: {value}"),
                 }
