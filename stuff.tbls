@@ -1,4 +1,4 @@
-Stuff
-id:INT
-name:STR
-age:INT
+stuff
+id:Int
+name:Str
+age:Int

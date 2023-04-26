@@ -22,40 +22,40 @@ struct Table {
 
 #[derive(Debug, PartialEq, Clone)]
 enum OpType {
-    SELECT,
-    INSERT,
-    DELETE,
-    CLEAR,
+    Select,
+    Insert,
+    Delete,
+    Clear,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
-    OP(OpType),
-    INT(i32),
-    STR(String),
+    Op(OpType),
+    Int(i32),
+    Str(String),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum ColType {
-    INT,
-    STR,
-    COUNT,
+    Int,
+    Str,
+    Count,
 }
 
 fn cmp_token_with_col(token: &Token, col_type: ColType) -> bool {
-    assert_eq!(ColType::COUNT as u8, 2);
+    assert_eq!(ColType::Count as u8, 2);
     match token {
-        Token::INT(_) => return col_type == ColType::INT,
-        Token::STR(_) => return col_type == ColType::STR,
+        Token::Int(_) => return col_type == ColType::Int,
+        Token::Str(_) => return col_type == ColType::Str,
         _ => unreachable!(),
     } 
 }
 
 fn try_parse_col_type(col_type: &str) -> Option<ColType> {
-    assert_eq!(ColType::COUNT as u8, 2);
+    assert_eq!(ColType::Count as u8, 2);
     match col_type {
-        "INT" => Some(ColType::INT),
-        "STR" => Some(ColType::STR),
+        "Int" => Some(ColType::Int),
+        "Str" => Some(ColType::Str),
         _ => None,
     }
 } 
@@ -108,10 +108,10 @@ fn parse_table_schema(file_path: &str) -> TableSchema {
 
 fn try_parse_op(op: &str) -> Option<OpType> {
     match op {
-        "select" => Some(OpType::SELECT),
-        "insert" => Some(OpType::INSERT),
-        "delete" => Some(OpType::DELETE),
-        "clear"  => Some(OpType::CLEAR),
+        "select" => Some(OpType::Select),
+        "insert" => Some(OpType::Insert),
+        "delete" => Some(OpType::Delete),
+        "clear"  => Some(OpType::Clear),
         _ => None,  
     }
 }
@@ -120,11 +120,11 @@ fn parse_querry(querry: &str) -> Vec<Token> {
     let mut tokens: Vec<Token> = vec![];
     for word in querry.split_ascii_whitespace() {
         if let Some(op) = try_parse_op(word) {
-            tokens.push(Token::OP(op)); 
+            tokens.push(Token::Op(op)); 
         } else if let Ok(value) = word.parse::<i32>() {
-            tokens.push(Token::INT(value));
+            tokens.push(Token::Int(value));
         } else {
-            tokens.push(Token::STR(String::from(word)));
+            tokens.push(Token::Str(String::from(word)));
         }
     }
     tokens
@@ -134,13 +134,13 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
     let mut tokens: Vec<Token> = vec![];
     for token in querry {
         match token {
-            Token::OP(op) => {
+            Token::Op(op) => {
                 match op {
-                    OpType::SELECT => {
+                    OpType::Select => {
                         let mut row_idxs = vec![];
                         'outer: for token in &tokens {
                             match token {
-                                Token::STR(value) => {
+                                Token::Str(value) => {
                                     if value == "*" {
                                         row_idxs.append(&mut (0..table.schema.cols.len()).collect::<Vec<usize>>());
                                         continue 'outer;
@@ -165,15 +165,15 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                         for row in &table.rows {
                             for idx in &row_idxs {
                                 match &row[*idx as usize] {
-                                    Token::INT(value) => print!("{value:>5}"),
-                                    Token::STR(value) => print!("{value:>20}"),
+                                    Token::Int(value) => print!("{value:>5}"),
+                                    Token::Str(value) => print!("{value:>20}"),
                                     _ => unreachable!(),
                                 }
                             }
                             println!();
                         }
                     },
-                    OpType::INSERT => {
+                    OpType::Insert => {
                         let col_count = table.schema.cols.len(); 
                         if tokens.len() < col_count {
                             eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", tokens.len(), col_count);
@@ -189,7 +189,7 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
 
                         table.rows.push(tokens[tokens.len() - col_count..tokens.len()].to_vec());
                     },
-                    OpType::DELETE => {
+                    OpType::Delete => {
                         if tokens.len() < 2 {
                             eprintln!("ERROR: not enaugh arguments for `delete` operation, provided {0} but needed 2", tokens.len());
                             return;
@@ -199,7 +199,7 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                         let target_token = tokens.pop().unwrap();
                         let mut idx = -1;
                         match target_token {
-                            Token::STR(value_token) => {
+                            Token::Str(value_token) => {
                                 for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
                                     if *col_name == value_token {
                                         idx = i as i32;
@@ -236,7 +236,7 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) {
                             deleted += 1;
                         }       
                     },
-                    OpType::CLEAR => tokens.clear(),
+                    OpType::Clear => tokens.clear(),
                 }
             },
             _ => tokens.push(token.clone()),
@@ -254,8 +254,8 @@ fn read_from_file(table: &mut Table) {
     let mut row_len = 0;
     for (_, col_type) in &table.schema.cols {
         match col_type {
-            ColType::INT => row_len += 4,
-            ColType::STR => row_len += 50,
+            ColType::Int => row_len += 4,
+            ColType::Str => row_len += 50,
             _ => unreachable!(),
         }
     }
@@ -276,22 +276,22 @@ fn read_from_file(table: &mut Table) {
         let mut row: Row = vec![];
         for (_, col_type) in &table.schema.cols {
             match col_type {
-                ColType::INT => {
+                ColType::Int => {
                     file.read(&mut i32_buf).unwrap_or_else(|err| {
                         eprintln!("ERROR: unable to read from file {file_path}: {err}");
                         exit(1);
                     });
                     
-                    row.push(Token::INT(i32::from_ne_bytes(i32_buf)));
+                    row.push(Token::Int(i32::from_ne_bytes(i32_buf)));
                 },
-                ColType::STR => {
+                ColType::Str => {
                     file.read(&mut str_buf).unwrap_or_else(|err| {
                         eprintln!("ERROR: unable to read from file {file_path}: {err}");
                         exit(1);
                     });
                     
                     let str_len = str_buf.iter().position(|&x| x == 0).unwrap_or(50);
-                    row.push(Token::STR(String::from_utf8_lossy(&str_buf[0..str_len]).to_string()));
+                    row.push(Token::Str(String::from_utf8_lossy(&str_buf[0..str_len]).to_string()));
                 },
                 _ => unreachable!(),
             }
@@ -310,14 +310,18 @@ fn save_to_file(table: Table) {
     for row in &table.rows {
         for token in row {
             match token {
-                Token::INT(value) => {
+                Token::Int(value) => {
                     file.write_all(&value.to_ne_bytes()).unwrap_or_else(|err| {
                         eprintln!("ERROR: unable to write to the file {file_path}: {err}");
                         exit(1);
                     });     
                 },
-                Token::STR(value) => {
-                    assert!(value.len() <= 50, "ERROR: string literals can't be longer then 50 characters");
+                Token::Str(value) => {
+                    let mut value = &value[0..];
+                    if value.len() > 50 {
+                        eprintln!("WARNING: string length must be less or equal to 50, only first 50 characters will be saved");
+                        value = &value[0..50];
+                    }
                     let mut str_buf: [u8; 50] = [0; 50];
                     str_buf[0..value.len()].clone_from_slice(&value.as_bytes());
                     file.write_all(&str_buf).unwrap_or_else(|err| {
@@ -329,6 +333,13 @@ fn save_to_file(table: Table) {
             }
         } 
     }
+}
+
+#[derive(PartialEq)]
+enum Mode {
+    Cmd,
+    Query,
+    MlQuery,
 }
 
 // TODO: Make some tests
@@ -343,13 +354,14 @@ fn main() {
     read_from_file(&mut table);
 
     let mut quit = false;
-    let mut querry_mode = false;
+    let mut mode = Mode::Cmd;
+    let mut query = String::new();
     while !quit {
-        if querry_mode { 
-            print!("querry > "); 
-        } else { 
-            print!("> "); 
-        }
+        match mode {
+            Mode::Cmd => print!("> "),
+            Mode::Query => print!("querry > "),
+            Mode::MlQuery => print!("querry : "),
+        } 
         
         io::stdout().flush().unwrap_or_else(|err| {
             eprintln!("ERROR: unable to flush stdout: {err}");
@@ -361,27 +373,42 @@ fn main() {
             eprintln!("ERROR: unable to read the line: {err}");
             exit(1);
         });
-        buffer.pop();
 
         // TODO: Add the command history
-        if querry_mode {
-            match buffer.as_str() {
-                "exit" => querry_mode = false,
-                "" => (),
-                _ => {
-                    let tokens = parse_querry(buffer.as_str());
-                    evaluate_querry(&tokens, &mut table);
-                },
-            }
-            continue;
-        } 
-        
-        let command = buffer.as_str().trim_start().split(' ').next().unwrap();
-        match command {
-            "exit" => quit = true,
-            "querry" => querry_mode = true,
-            "" => (),
-            _ => println!("Unknown command: {command}"),
+        match mode {
+            Mode::Cmd => {
+                let command = buffer.as_str().trim_start().split_ascii_whitespace().next().unwrap();
+                match command {
+                    "exit" => quit = true,
+                    "querry" => mode = Mode::Query,
+                    "" => (),
+                    _ => println!("Unknown command: {command}"),
+                }
+            },
+            Mode::Query | Mode::MlQuery => {
+                for c in buffer.bytes() {
+                    if c == b'(' {
+                        mode = Mode::MlQuery;
+                    } else if c == b')' {
+                        mode = Mode::Query;
+                    }
+                }
+                buffer = buffer.replace("(", "");
+                buffer = buffer.replace(")", "");
+                query.push_str(&buffer);
+                if mode == Mode::MlQuery {
+                    continue;
+                }
+
+                match query.as_str().trim() {
+                    "exit" => mode = Mode::Cmd,
+                    _ => {
+                        let tokens = parse_querry(query.as_str());
+                        evaluate_querry(&tokens, &mut table);
+                    },
+                }
+                query.clear();
+            },
         }
     }
 
