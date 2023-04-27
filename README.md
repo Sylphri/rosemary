@@ -1,5 +1,6 @@
-# Database
+# Rosemary DB
 ### Software in process of development. Don't have any high expectations.
+Rosemary is an embedded database similar to SQLite written in Rust. Query language inspired by stack-based programming.
 # Quick Start
 
 ```console
