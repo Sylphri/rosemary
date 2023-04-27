@@ -12,7 +12,7 @@ struct TableSchema {
 }
 
 // TODO: think about redisign of token system
-type Row = Vec<Token>;
+type Row = Vec<WordType>;
 
 #[derive(Debug)]
 struct Table {
@@ -20,19 +20,31 @@ struct Table {
     rows: Vec<Row>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum OpType {
     Select,
     Insert,
     Delete,
+    FilterAnd,
+    FilterOr,
+    Equal,
+    NotEqual,
+    Less,
+    More,
+    Count,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+enum WordType {
+    Int(i32),
+    Str(String),
 }
 
 // TODO: Introduce a sized string type
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
     Op(OpType),
-    Int(i32),
-    Str(String),
+    Word(WordType),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -42,12 +54,11 @@ enum ColType {
     Count,
 }
 
-fn cmp_token_with_col(token: &Token, col_type: ColType) -> bool {
+fn cmp_word_with_col(word: &WordType, col_type: ColType) -> bool {
     assert_eq!(ColType::Count as u8, 2);
-    match token {
-        Token::Int(_) => return col_type == ColType::Int,
-        Token::Str(_) => return col_type == ColType::Str,
-        _ => unreachable!(),
+    match word {
+        WordType::Int(_) => return col_type == ColType::Int,
+        WordType::Str(_) => return col_type == ColType::Str,
     } 
 }
 
@@ -108,10 +119,17 @@ fn parse_table_schema(file_path: &str) -> TableSchema {
 }
 
 fn try_parse_op(op: &str) -> Option<OpType> {
+    assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in try_parse_op()");
     match op {
         "select" => Some(OpType::Select),
         "insert" => Some(OpType::Insert),
         "delete" => Some(OpType::Delete),
+        "filter-and" => Some(OpType::FilterAnd),
+        "filter-or" => Some(OpType::FilterOr),
+        "==" => Some(OpType::Equal),
+        "!=" => Some(OpType::NotEqual),
+        ">" => Some(OpType::More),
+        "<" => Some(OpType::Less),
         _ => None,  
     }
 }
@@ -122,16 +140,84 @@ fn parse_querry(querry: &str) -> Vec<Token> {
         if let Some(op) = try_parse_op(word) {
             tokens.push(Token::Op(op)); 
         } else if let Ok(value) = word.parse::<i32>() {
-            tokens.push(Token::Int(value));
+            tokens.push(Token::Word(WordType::Int(value)));
         } else {
-            tokens.push(Token::Str(String::from(word)));
+            tokens.push(Token::Word(WordType::Str(String::from(word))));
         }
     }
     tokens
 }
 
+#[derive(Debug)]
+struct Condition {
+    idx: usize,
+    value: WordType,
+    op: OpType,
+}
+
+fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Option<Condition> {
+    assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in logical_op_check()");
+    let op_sym = match op {
+        OpType::Equal => "==",
+        OpType::NotEqual => "!=",
+        OpType::Less => "<",
+        OpType::More => ">",
+        _ => unreachable!(),
+    };
+
+    if words.len() < 2 {
+        eprintln!("ERROR: not enaugh arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
+        return None;
+    }
+    
+    let mut col = String::new();
+    match &words[words.len() - 2] {
+        WordType::Str(value) => col = value.clone(),
+        _ => {
+            eprintln!("ERROR: invalid argument for `{op_sym}` operation, expected string but found {0:?}", col);
+            return None;
+        },
+    }
+
+    let mut idx = -1;
+    for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
+        if *col_name == col {
+            idx = i as i32;
+            break;
+        }
+    }
+
+    if idx < 0 {
+        eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
+        return None;
+    }
+
+    let value = &words[words.len() - 1];
+    if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
+        eprintln!("ERROR: invalid argument for `{op_sym}` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
+        return None;
+    }
+    
+    Some(Condition {
+        idx: idx as usize,
+        value: value.clone(),
+        op: op,
+    })
+}
+
+fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: OpType) -> bool {
+    match condition {
+        OpType::Equal => *a != *b,
+        OpType::NotEqual => *a == *b,
+        OpType::Less => *a >= *b,
+        OpType::More => *a <= *b,
+        _ => unreachable!(),
+    }
+}
+
 fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
-    let mut tokens: Vec<Token> = vec![];
+    let mut words: Vec<WordType> = vec![];
+    let mut conditions: Vec<Condition> = vec![];
     let mut temp_table = Table {
         schema: TableSchema {
             name: String::from("temp"),
@@ -146,9 +232,9 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                 match op {
                     OpType::Select => {
                         let mut row_idxs = vec![];
-                        'outer: for token in &tokens {
-                            match token {
-                                Token::Str(value) => {
+                        'outer: for word in &words {
+                            match word {
+                                WordType::Str(value) => {
                                     if value == "*" {
                                         row_idxs.append(&mut (0..table.schema.cols.len()).collect::<Vec<usize>>());
                                         continue;
@@ -187,69 +273,66 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         for row in &table.rows {
                             let mut temp_row = vec![];
                             for idx in &row_idxs {
-                                match &row[*idx as usize] {
-                                    Token::Op(_) => unreachable!("Operation tokens can't be here. Probably some bug in evaluation"),
-                                    other => temp_row.push(other.clone()),
-                                }
+                                temp_row.push(row[*idx as usize].clone());
                             }
                             temp_table.rows.push(temp_row);
                         }
-                        tokens.clear();
+                        words.clear();
                     },
                     OpType::Insert => {
                         let col_count = table.schema.cols.len(); 
-                        if tokens.len() < col_count {
-                            eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", tokens.len(), col_count);
+                        if words.len() < col_count {
+                            eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words.len(), col_count);
                             return None;
                         }
 
-                        for (i, token) in tokens[tokens.len() - col_count..tokens.len()].iter().enumerate() {
-                            if !cmp_token_with_col(token, table.schema.cols[i].1) {
-                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", token, table.schema.cols[i].1);
+                        for (i, word) in words[words.len() - col_count..words.len()].iter().enumerate() {
+                            if !cmp_word_with_col(word, table.schema.cols[i].1) {
+                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, table.schema.cols[i].1);
                                 return None;
                             }
                         }
 
-                        table.rows.push(tokens[tokens.len() - col_count..tokens.len()].to_vec());
-                        tokens.clear();
+                        table.rows.push(words[words.len() - col_count..words.len()].to_vec());
+                        words.clear();
                     },
                     OpType::Delete => {
-                        if tokens.len() < 2 {
-                            eprintln!("ERROR: not enaugh arguments for `delete` operation, provided {0} but needed 2", tokens.len());
+                        if words.len() < 2 {
+                            eprintln!("ERROR: not enaugh arguments for `delete` operation, provided {0} but needed 2", words.len());
                             return None;
                         }
 
-                        let value_token = tokens.pop().unwrap();
-                        let target_token = tokens.pop().unwrap();
+                        let searched_value = words.pop().unwrap();
+                        let searched_col = words.pop().unwrap();
                         let mut idx = -1;
-                        match target_token {
-                            Token::Str(value_token) => {
+                        match searched_col {
+                            WordType::Str(name) => {
                                 for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
-                                    if *col_name == value_token {
+                                    if *col_name == name {
                                         idx = i as i32;
                                         break;
                                     }
                                 }
                                 
                                 if idx < 0 {
-                                    eprintln!("ERROR: no such column `{0}` in table `{1}`", value_token, table.schema.name);
+                                    eprintln!("ERROR: no such column `{0}` in table `{1}`", name, table.schema.name);
                                     return None;
                                 }
                             },
                             _ => {
-                                eprintln!("ERROR: first argument for `delete` operation must be a string but provided {0:?}", target_token);
+                                eprintln!("ERROR: first argument for `delete` operation must be a string but provided {0:?}", searched_col);
                                 return None;
                             }
                         }        
 
-                        if !cmp_token_with_col(&value_token, table.schema.cols[idx as usize].1) {
-                            eprintln!("ERROR: value_token for compare that was provided for `delete` operation has type {0:?} but column {1} has type {2:?}", value_token, table.schema.cols[idx as usize].0, table.schema.cols[idx as usize].1);
+                        if !cmp_word_with_col(&searched_value, table.schema.cols[idx as usize].1) {
+                            eprintln!("ERROR: value for compare that was provided for `delete` operation has type {0:?} but column {1} has type {2:?}", searched_value, table.schema.cols[idx as usize].0, table.schema.cols[idx as usize].1);
                             return None;
                         }
 
                         let mut rows_to_delete = vec![];
                         for (i, row) in table.rows.iter().enumerate() {
-                            if value_token == row[idx as usize] {
+                            if searched_value == row[idx as usize] {
                                 rows_to_delete.push(i); 
                             }
                         }
@@ -259,11 +342,84 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                             table.rows.remove(row - deleted);
                             deleted += 1;
                         }       
-                        tokens.clear();
+                        words.clear();
                     },
+                    OpType::FilterAnd => {
+                        let mut filtered_rows = vec![];
+                        for row in &temp_table.rows {
+                            let mut filtered = false;
+                            for condition in &conditions {
+                                assert!(OpType::Count as u8 == 9, "Exhaustive logic OpTypes handling");
+                                match &row[condition.idx] {
+                                    WordType::Int(value) => {
+                                        if let WordType::Int(cond_value) = &condition.value {
+                                            filtered = filter_condition(value, cond_value, condition.op);
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    },
+                                    WordType::Str(value) => {
+                                        if let WordType::Str(cond_value) = &condition.value {
+                                            filtered = filter_condition(value, cond_value, condition.op);
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    }
+                                }
+                                if filtered { break; }
+                            }
+
+                            if !filtered {
+                                filtered_rows.push(row.clone());
+                            }
+                        }
+
+                        temp_table.rows = filtered_rows; 
+                        conditions.clear();
+                    },
+                    OpType::FilterOr => {
+                        let mut filtered_rows = vec![];
+                        for row in &temp_table.rows {
+                            let mut filtered_count = 0;
+                            for condition in &conditions {
+                                assert!(OpType::Count as u8 == 9, "Exhaustive logic OpTypes handling");
+                                match &row[condition.idx] {
+                                    WordType::Int(value) => {
+                                        if let WordType::Int(cond_value) = &condition.value {
+                                            if filter_condition(value, cond_value, condition.op) { filtered_count += 1; }
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    },
+                                    WordType::Str(value) => {
+                                        if let WordType::Str(cond_value) = &condition.value {
+                                            if filter_condition(value, cond_value, condition.op) { filtered_count += 1; }
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    }
+                                }
+                            }
+
+                            if filtered_count < conditions.len() {
+                                filtered_rows.push(row.clone());
+                            }
+                        }
+
+                        temp_table.rows = filtered_rows; 
+                        conditions.clear();
+                    },
+                    op @ OpType::Equal | op @ OpType::NotEqual | op @ OpType::Less | op @ OpType::More => {
+                        if let Some(condition) = logical_op_check(*op, &words, &temp_table) {
+                            conditions.push(condition);
+                        } else {
+                            return None;
+                        }
+                    },
+                    OpType::Count => unreachable!(),
                 }
             },
-            _ => tokens.push(token.clone()),
+            Token::Word(word) => words.push(word.clone()),
         }
     }
 
@@ -308,7 +464,7 @@ fn read_from_file(table: &mut Table) {
                         exit(1);
                     });
                     
-                    row.push(Token::Int(i32::from_ne_bytes(i32_buf)));
+                    row.push(WordType::Int(i32::from_ne_bytes(i32_buf)));
                 },
                 ColType::Str => {
                     file.read(&mut str_buf).unwrap_or_else(|err| {
@@ -317,7 +473,7 @@ fn read_from_file(table: &mut Table) {
                     });
                     
                     let str_len = str_buf.iter().position(|&x| x == 0).unwrap_or(50);
-                    row.push(Token::Str(String::from_utf8_lossy(&str_buf[0..str_len]).to_string()));
+                    row.push(WordType::Str(String::from_utf8_lossy(&str_buf[0..str_len]).to_string()));
                 },
                 _ => unreachable!(),
             }
@@ -334,15 +490,15 @@ fn save_to_file(table: Table) {
     });
     
     for row in &table.rows {
-        for token in row {
-            match token {
-                Token::Int(value) => {
+        for word in row {
+            match word {
+                WordType::Int(value) => {
                     file.write_all(&value.to_ne_bytes()).unwrap_or_else(|err| {
                         eprintln!("ERROR: unable to write to the file {file_path}: {err}");
                         exit(1);
                     });     
                 },
-                Token::Str(value) => {
+                WordType::Str(value) => {
                     let mut value = &value[0..];
                     if value.len() > 50 {
                         eprintln!("WARNING: string length must be less or equal to 50, only first 50 characters will be saved");
@@ -355,7 +511,6 @@ fn save_to_file(table: Table) {
                         exit(1);
                     });     
                 },
-                _ => unreachable!(),
             }
         } 
     }
@@ -406,7 +561,7 @@ fn main() {
                 let command = buffer.as_str().split_ascii_whitespace().next();
                 match command {
                     Some("exit") => quit = true,
-                    Some("querry") => mode = Mode::Query,
+                    Some("query") => mode = Mode::Query,
                     None => (),
                     Some(value) => println!("Unknown command: {value}"),
                 }
@@ -434,11 +589,10 @@ fn main() {
                         // TODO: implement Display trait for Table
                         if let Some(table) = result_table {
                             for row in table.rows {
-                                for token in row {
-                                    match token {
-                                        Token::Int(value) => print!("{value:>5}"),
-                                        Token::Str(value) => print!("{value:>20}"),
-                                        _ => unreachable!(),
+                                for word in row {
+                                    match word {
+                                        WordType::Int(value) => print!("{value:>5}"),
+                                        WordType::Str(value) => print!("{value:>20}"),
                                     }
                                 }
                                 println!();
