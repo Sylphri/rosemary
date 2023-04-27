@@ -25,7 +25,8 @@ enum OpType {
     Select,
     Insert,
     Delete,
-    Filter,
+    FilterAnd,
+    FilterOr,
     Equal,
     NotEqual,
     Less,
@@ -118,12 +119,13 @@ fn parse_table_schema(file_path: &str) -> TableSchema {
 }
 
 fn try_parse_op(op: &str) -> Option<OpType> {
-    assert!(OpType::Count as u8 == 8, "Exhaustive OpType handling in try_parse_op()");
+    assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in try_parse_op()");
     match op {
         "select" => Some(OpType::Select),
         "insert" => Some(OpType::Insert),
         "delete" => Some(OpType::Delete),
-        "filter" => Some(OpType::Filter),
+        "filter-and" => Some(OpType::FilterAnd),
+        "filter-or" => Some(OpType::FilterOr),
         "==" => Some(OpType::Equal),
         "!=" => Some(OpType::NotEqual),
         ">" => Some(OpType::More),
@@ -154,7 +156,7 @@ struct Condition {
 }
 
 fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Option<Condition> {
-    assert!(OpType::Count as u8 == 8, "Exhaustive OpType handling in logical_op_check()");
+    assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in logical_op_check()");
     let op_sym = match op {
         OpType::Equal => "==",
         OpType::NotEqual => "!=",
@@ -342,12 +344,12 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         }       
                         words.clear();
                     },
-                    OpType::Filter => {
+                    OpType::FilterAnd => {
                         let mut filtered_rows = vec![];
                         for row in &temp_table.rows {
                             let mut filtered = false;
                             for condition in &conditions {
-                                assert!(OpType::Count as u8 == 8, "Exhaustive logic OpTypes handling");
+                                assert!(OpType::Count as u8 == 9, "Exhaustive logic OpTypes handling");
                                 match &row[condition.idx] {
                                     WordType::Int(value) => {
                                         if let WordType::Int(cond_value) = &condition.value {
@@ -373,6 +375,39 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         }
 
                         temp_table.rows = filtered_rows; 
+                        conditions.clear();
+                    },
+                    OpType::FilterOr => {
+                        let mut filtered_rows = vec![];
+                        for row in &temp_table.rows {
+                            let mut filtered_count = 0;
+                            for condition in &conditions {
+                                assert!(OpType::Count as u8 == 9, "Exhaustive logic OpTypes handling");
+                                match &row[condition.idx] {
+                                    WordType::Int(value) => {
+                                        if let WordType::Int(cond_value) = &condition.value {
+                                            if filter_condition(value, cond_value, condition.op) { filtered_count += 1; }
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    },
+                                    WordType::Str(value) => {
+                                        if let WordType::Str(cond_value) = &condition.value {
+                                            if filter_condition(value, cond_value, condition.op) { filtered_count += 1; }
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    }
+                                }
+                            }
+
+                            if filtered_count < conditions.len() {
+                                filtered_rows.push(row.clone());
+                            }
+                        }
+
+                        temp_table.rows = filtered_rows; 
+                        conditions.clear();
                     },
                     op @ OpType::Equal | op @ OpType::NotEqual | op @ OpType::Less | op @ OpType::More => {
                         if let Some(condition) = logical_op_check(*op, &words, &temp_table) {
