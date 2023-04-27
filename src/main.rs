@@ -20,7 +20,7 @@ struct Table {
     rows: Vec<Row>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum OpType {
     Select,
     Insert,
@@ -151,6 +151,66 @@ struct Condition {
     idx: usize,
     value: WordType,
     op: OpType,
+}
+
+fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Option<Condition> {
+    assert!(OpType::Count as u8 == 8, "Exhaustive OpType handling in logical_op_check()");
+    let op_sym = match op {
+        OpType::Equal => "==",
+        OpType::NotEqual => "!=",
+        OpType::Less => "<",
+        OpType::More => ">",
+        _ => unreachable!(),
+    };
+
+    if words.len() < 2 {
+        eprintln!("ERROR: not enaugh arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
+        return None;
+    }
+    
+    let mut col = String::new();
+    match &words[words.len() - 2] {
+        WordType::Str(value) => col = value.clone(),
+        _ => {
+            eprintln!("ERROR: invalid argument for `{op_sym}` operation, expected string but found {0:?}", col);
+            return None;
+        },
+    }
+
+    let mut idx = -1;
+    for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
+        if *col_name == col {
+            idx = i as i32;
+            break;
+        }
+    }
+
+    if idx < 0 {
+        eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
+        return None;
+    }
+
+    let value = &words[words.len() - 1];
+    if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
+        eprintln!("ERROR: invalid argument for `{op_sym}` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
+        return None;
+    }
+    
+    Some(Condition {
+        idx: idx as usize,
+        value: value.clone(),
+        op: op,
+    })
+}
+
+fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: OpType) -> bool {
+    match condition {
+        OpType::Equal => *a != *b,
+        OpType::NotEqual => *a == *b,
+        OpType::Less => *a >= *b,
+        OpType::More => *a <= *b,
+        _ => unreachable!(),
+    }
 }
 
 fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
@@ -288,106 +348,23 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                             let mut filtered = false;
                             for condition in &conditions {
                                 assert!(OpType::Count as u8 == 8, "Exhaustive logic OpTypes handling");
-                                // TODO: Compress this in a function
-                                match condition.op {
-                                    OpType::Equal => {
-                                        match &row[condition.idx] {
-                                            WordType::Int(value) => {
-                                                if let WordType::Int(cond_value) = &condition.value {
-                                                    if *value != *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            },
-                                            WordType::Str(value) => {
-                                                if let WordType::Str(cond_value) = &condition.value {
-                                                    if *value != *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            }
+                                match &row[condition.idx] {
+                                    WordType::Int(value) => {
+                                        if let WordType::Int(cond_value) = &condition.value {
+                                            filtered = filter_condition(value, cond_value, condition.op);
+                                        } else {
+                                            unreachable!();
                                         }
                                     },
-                                    OpType::NotEqual => {
-                                        match &row[condition.idx] {
-                                            WordType::Int(value) => {
-                                                if let WordType::Int(cond_value) = &condition.value {
-                                                    if *value == *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            },
-                                            WordType::Str(value) => {
-                                                if let WordType::Str(cond_value) = &condition.value {
-                                                    if *value == *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            }
+                                    WordType::Str(value) => {
+                                        if let WordType::Str(cond_value) = &condition.value {
+                                            filtered = filter_condition(value, cond_value, condition.op);
+                                        } else {
+                                            unreachable!();
                                         }
-                                    },
-                                    OpType::Less => {
-                                        match &row[condition.idx] {
-                                            WordType::Int(value) => {
-                                                if let WordType::Int(cond_value) = &condition.value {
-                                                    if *value >= *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            },
-                                            WordType::Str(value) => {
-                                                if let WordType::Str(cond_value) = &condition.value {
-                                                    if *value >= *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            }
-                                        }
-                                    },
-                                    OpType::More => {
-                                        match &row[condition.idx] {
-                                            WordType::Int(value) => {
-                                                if let WordType::Int(cond_value) = &condition.value {
-                                                    if *value <= *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            },
-                                            WordType::Str(value) => {
-                                                if let WordType::Str(cond_value) = &condition.value {
-                                                    if *value <= *cond_value {
-                                                        filtered = true;
-                                                        break;
-                                                    }      
-                                                } else {
-                                                    unreachable!();
-                                                }
-                                            }
-                                        }
-                                    },
-                                    _ => unreachable!(),
-                                } 
+                                    }
+                                }
+                                if filtered { break; }
                             }
 
                             if !filtered {
@@ -397,166 +374,12 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
 
                         temp_table.rows = filtered_rows; 
                     },
-                    // TODO: Compress this in a function
-                    OpType::Equal => {
-                        if words.len() < 2 {
-                            eprintln!("ERROR: not enaugh arguments for `==` operation, provided {0} but needed 2", words.len());
+                    op @ OpType::Equal | op @ OpType::NotEqual | op @ OpType::Less | op @ OpType::More => {
+                        if let Some(condition) = logical_op_check(*op, &words, &temp_table) {
+                            conditions.push(condition);
+                        } else {
                             return None;
                         }
-                        
-                        let mut col = String::new();
-                        match &words[words.len() - 2] {
-                            WordType::Str(value) => col = value.clone(),
-                            _ => {
-                                eprintln!("ERROR: invalid argument for `==` operation, expected string but found {0:?}", col);
-                                return None;
-                            },
-                        }
-
-                        let mut idx = -1;
-                        for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
-                            if *col_name == col {
-                                idx = i as i32;
-                                break;
-                            }
-                        }
-
-                        if idx < 0 {
-                            eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
-                            return None;
-                        }
-
-                        let value = &words[words.len() - 1];
-                        if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
-                            eprintln!("ERROR: invalid argument for `==` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
-                            return None;
-                        }
-                        
-                        conditions.push(Condition {
-                            idx: idx as usize,
-                            value: value.clone(),
-                            op: OpType::Equal,
-                        });
-                    },
-                    OpType::NotEqual => {
-                        if words.len() < 2 {
-                            eprintln!("ERROR: not enaugh arguments for `!=` operation, provided {0} but needed 2", words.len());
-                            return None;
-                        }
-                        
-                        let mut col = String::new();
-                        match &words[words.len() - 2] {
-                            WordType::Str(value) => col = value.clone(),
-                            _ => {
-                                eprintln!("ERROR: invalid argument for `!=` operation, expected string but found {0:?}", col);
-                                return None;
-                            },
-                        }
-
-                        let mut idx = -1;
-                        for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
-                            if *col_name == col {
-                                idx = i as i32;
-                                break;
-                            }
-                        }
-
-                        if idx < 0 {
-                            eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
-                            return None;
-                        }
-
-                        let value = &words[words.len() - 1];
-                        if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
-                            eprintln!("ERROR: invalid argument for `!=` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
-                            return None;
-                        }
-                        
-                        conditions.push(Condition {
-                            idx: idx as usize,
-                            value: value.clone(),
-                            op: OpType::NotEqual,
-                        });
-                    },
-                    OpType::Less => {
-                        if words.len() < 2 {
-                            eprintln!("ERROR: not enaugh arguments for `<` operation, provided {0} but needed 2", words.len());
-                            return None;
-                        }
-                        
-                        let mut col = String::new();
-                        match &words[words.len() - 2] {
-                            WordType::Str(value) => col = value.clone(),
-                            _ => {
-                                eprintln!("ERROR: invalid argument for `<` operation, expected string but found {0:?}", col);
-                                return None;
-                            },
-                        }
-
-                        let mut idx = -1;
-                        for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
-                            if *col_name == col {
-                                idx = i as i32;
-                                break;
-                            }
-                        }
-
-                        if idx < 0 {
-                            eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
-                            return None;
-                        }
-
-                        let value = &words[words.len() - 1];
-                        if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
-                            eprintln!("ERROR: invalid argument for `<` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
-                            return None;
-                        }
-                        
-                        conditions.push(Condition {
-                            idx: idx as usize,
-                            value: value.clone(),
-                            op: OpType::Less,
-                        });
-                    },
-                    OpType::More => {
-                        if words.len() < 2 {
-                            eprintln!("ERROR: not enaugh arguments for `>` operation, provided {0} but needed 2", words.len());
-                            return None;
-                        }
-                        
-                        let mut col = String::new();
-                        match &words[words.len() - 2] {
-                            WordType::Str(value) => col = value.clone(),
-                            _ => {
-                                eprintln!("ERROR: invalid argument for `>` operation, expected string but found {0:?}", col);
-                                return None;
-                            },
-                        }
-
-                        let mut idx = -1;
-                        for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
-                            if *col_name == col {
-                                idx = i as i32;
-                                break;
-                            }
-                        }
-
-                        if idx < 0 {
-                            eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
-                            return None;
-                        }
-
-                        let value = &words[words.len() - 1];
-                        if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
-                            eprintln!("ERROR: invalid argument for `>` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
-                            return None;
-                        }
-                        
-                        conditions.push(Condition {
-                            idx: idx as usize,
-                            value: value.clone(),
-                            op: OpType::More,
-                        });
                     },
                     OpType::Count => unreachable!(),
                 }
