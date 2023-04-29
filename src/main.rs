@@ -134,18 +134,37 @@ fn try_parse_op(op: &str) -> Option<OpType> {
     }
 }
 
-fn parse_querry(querry: &str) -> Vec<Token> {
+fn parse_querry(query: &str) -> Option<Vec<Token>> {
     let mut tokens: Vec<Token> = vec![];
-    for word in querry.split_ascii_whitespace() {
-        if let Some(op) = try_parse_op(word) {
-            tokens.push(Token::Op(op)); 
-        } else if let Ok(value) = word.parse::<i32>() {
-            tokens.push(Token::Word(WordType::Int(value)));
+    let mut query = query.clone();
+    loop {
+        query = query.trim_start();
+        if query.len() == 0 { break; }
+        if query.bytes().next().unwrap() == b'"' {
+            query = &query[1..]; 
+            if let Some(end) = query.find('"') {
+                tokens.push(Token::Word(WordType::Str(String::from(&query[0..end]))));
+                query = &query[end+1..];
+            } else {
+                eprintln!("ERROR: unclosed string literal in a query");
+                return None;
+            }
         } else {
-            tokens.push(Token::Word(WordType::Str(String::from(word))));
+            let end = query.find(char::is_whitespace).unwrap_or_else(|| {
+                unreachable!();
+            });
+            let word = &query[0..end];
+            query = &query[end..];
+            if let Some(op) = try_parse_op(word) {
+                tokens.push(Token::Op(op)); 
+            } else if let Ok(value) = word.parse::<i32>() {
+                tokens.push(Token::Word(WordType::Int(value)));
+            } else {
+                tokens.push(Token::Word(WordType::Str(String::from(word))));
+            }
         }
     }
-    tokens
+    Some(tokens)
 }
 
 #[derive(Debug)]
@@ -585,7 +604,10 @@ fn main() {
                     "exit" => mode = Mode::Cmd,
                     _ => {
                         let tokens = parse_querry(query.as_str());
-                        let result_table = evaluate_querry(&tokens, &mut table);
+                        if tokens == None {
+                            continue; 
+                        }
+                        let result_table = evaluate_querry(&tokens.unwrap(), &mut table);
                         // TODO: implement Display trait for Table
                         if let Some(table) = result_table {
                             for row in table.rows {
