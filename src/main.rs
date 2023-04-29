@@ -234,7 +234,7 @@ fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: OpType) -> bool {
     }
 }
 
-fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
+fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
     let mut words: Vec<WordType> = vec![];
     let mut conditions: Vec<Condition> = vec![];
     let mut temp_table = Table {
@@ -245,11 +245,15 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
         rows: vec![],
     };
     
-    for token in querry {
+    for (token_id, token) in query.iter().enumerate() {
         match token {
             Token::Op(op) => {
                 match op {
                     OpType::Select => {
+                        if words.len() == 0 {
+                            eprintln!("ERROR: no arguments provided for `select` operation");
+                            return None;
+                        }
                         let mut row_idxs = vec![];
                         'outer: for word in &words {
                             match word {
@@ -316,43 +320,34 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         words.clear();
                     },
                     OpType::Delete => {
-                        if words.len() < 2 {
-                            eprintln!("ERROR: not enaugh arguments for `delete` operation, provided {0} but needed 2", words.len());
-                            return None;
-                        }
-
-                        let searched_value = words.pop().unwrap();
-                        let searched_col = words.pop().unwrap();
-                        let mut idx = -1;
-                        match searched_col {
-                            WordType::Str(name) => {
-                                for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
-                                    if *col_name == name {
-                                        idx = i as i32;
-                                        break;
-                                    }
-                                }
-                                
-                                if idx < 0 {
-                                    eprintln!("ERROR: no such column `{0}` in table `{1}`", name, table.schema.name);
-                                    return None;
-                                }
-                            },
-                            _ => {
-                                eprintln!("ERROR: first argument for `delete` operation must be a string but provided {0:?}", searched_col);
-                                return None;
-                            }
-                        }        
-
-                        if !cmp_word_with_col(&searched_value, table.schema.cols[idx as usize].1) {
-                            eprintln!("ERROR: value for compare that was provided for `delete` operation has type {0:?} but column {1} has type {2:?}", searched_value, table.schema.cols[idx as usize].0, table.schema.cols[idx as usize].1);
-                            return None;
-                        }
-
                         let mut rows_to_delete = vec![];
                         for (i, row) in table.rows.iter().enumerate() {
-                            if searched_value == row[idx as usize] {
-                                rows_to_delete.push(i); 
+                            let mut filtered_cols = 0;
+                            for condition in &conditions {
+                                assert!(OpType::Count as u8 == 9, "Exhaustive logic OpTypes handling");
+                                match &row[condition.idx] {
+                                    WordType::Int(value) => {
+                                        if let WordType::Int(cond_value) = &condition.value {
+                                            if !filter_condition(value, cond_value, condition.op) {
+                                                filtered_cols += 1;
+                                            }
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    },
+                                    WordType::Str(value) => {
+                                        if let WordType::Str(cond_value) = &condition.value {
+                                            if !filter_condition(value, cond_value, condition.op) {
+                                                filtered_cols += 1;
+                                            }
+                                        } else {
+                                            unreachable!();
+                                        }
+                                    }
+                                }
+                            }
+                            if filtered_cols == conditions.len() {
+                                rows_to_delete.push(i);
                             }
                         }
 
@@ -361,7 +356,7 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                             table.rows.remove(row - deleted);
                             deleted += 1;
                         }       
-                        words.clear();
+                        conditions.clear();
                     },
                     OpType::FilterAnd => {
                         let mut filtered_rows = vec![];
@@ -429,8 +424,24 @@ fn evaluate_querry(querry: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         conditions.clear();
                     },
                     op @ OpType::Equal | op @ OpType::NotEqual | op @ OpType::Less | op @ OpType::More => {
-                        if let Some(condition) = logical_op_check(*op, &words, &temp_table) {
+                        let mut curr_table = &temp_table;
+                        let mut query = query[token_id + 1..].iter();
+                        while let Some(token) = query.next() {
+                            match token {
+                                Token::Word(_) => (),
+                                Token::Op(op) => {
+                                    if OpType::Delete == *op {
+                                        curr_table = &table;
+                                        break;
+                                    }
+                                }
+                            }      
+                        } 
+                        
+                        if let Some(condition) = logical_op_check(*op, &words, &curr_table) {
                             conditions.push(condition);
+                            words.pop();
+                            words.pop();
                         } else {
                             return None;
                         }
@@ -607,7 +618,7 @@ fn main() {
                         if tokens == None {
                             continue; 
                         }
-                        let result_table = evaluate_querry(&tokens.unwrap(), &mut table);
+                        let result_table = execute_query(&tokens.unwrap(), &mut table);
                         // TODO: implement Display trait for Table
                         if let Some(table) = result_table {
                             for row in table.rows {
