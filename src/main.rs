@@ -3,7 +3,10 @@ use std::io::Write;
 use std::io::Read;
 use std::fs::File;
 use std::fs;
+use std::fmt;
 use std::process::exit;
+
+mod tests;
 
 #[derive(Debug, Clone)]
 struct TableSchema {
@@ -18,6 +21,30 @@ type Row = Vec<WordType>;
 struct Table {
     schema: TableSchema,
     rows: Vec<Row>,
+}
+
+impl fmt::Display for Table {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        assert!(ColType::Count as u8 == 2, "Exhaustive ColType handling in Table::fmt()");
+        for (name, col_type) in &self.schema.cols {
+            match col_type {
+                ColType::Int => print!("{name:>5}"),
+                ColType::Str => print!("{name:>20}"),
+                _ => unreachable!(),
+            }
+        }
+        println!();
+        for row in &self.rows {
+            for word in row {
+                match word {
+                    WordType::Int(value) => print!("{value:>5}"),
+                    WordType::Str(value) => print!("{value:>20}"),
+                }
+            }
+            println!();
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -71,51 +98,53 @@ fn try_parse_col_type(col_type: &str) -> Option<ColType> {
     }
 } 
 
-// TODO: make sure that schema contains only columns with unique names
-fn parse_table_schema(file_path: &str) -> TableSchema {
-    let mut file = File::open(file_path).unwrap_or_else(|err| {
-        eprintln!("ERROR: unable to open the file {file_path}: {err}");
-        exit(1);
-    });
+fn parse_table_schema(file_path: &str) -> Result<TableSchema, String> {
+    let file = File::open(file_path);
+    if let Err(err) = file {
+        return Err(format!("ERROR: unable to open the file {file_path}: {err}"));
+    } 
+    let mut file = file.unwrap();
 
     let mut content = String::new();
-    file.read_to_string(&mut content).unwrap_or_else(|err| {
-        eprintln!("ERROR: unable to read from the file {file_path}: {err}");
-        exit(1);
-    });
+    if let Err(err) = file.read_to_string(&mut content) {
+        return Err(format!("ERROR: unable to read from the file {file_path}: {err}"));
+    }
 
     let mut cols = vec![];
     let mut lines = content.lines();
-    let name = lines.next().unwrap_or_else(|| {
-        eprintln!("ERROR: table name not provided in a file {file_path}");
-        exit(1);
-    }).to_string();
+    let name = match lines.next() {
+        Some(value) => value.trim(),
+        None => return Err(format!("ERROR: table name not provided in a file {file_path}")),
+    };
 
-    if name.contains(":") {
-        eprintln!("ERROR: table name can't contain a ':': {file_path}");
-        exit(1);
+    if name.len() == 0 {
+        return Err(format!("ERROR: table name can't be empty: {file_path}"));
     }
 
     for (i, line) in lines.enumerate() {
-        let (name, type_name) = line.split_once(':').unwrap_or_else(|| {
-            eprintln!("ERROR: invalid format for column at line {i} in a file {file_path}");
-            exit(1);
-        });
+        let (name, type_name) = match line.split_once(':') {
+            Some((name, type_name)) => (name.trim(), type_name.trim()),
+            None => return Err(format!("ERROR: invalid format for column at line {} in a file: {}", i + 1, file_path)),
+        };
 
         if name.len() == 0 {
-            eprintln!("ERROR: empty column name at line {i} in a file {file_path}");
-            exit(1);
+            return Err(format!("ERROR: empty column name at line {} in a file {}", i + 1, file_path));
+        }
+
+        for (col_name, _) in &cols {
+            if col_name == name {
+                return Err(format!("ERROR: column with name '{}' already exists in table scheme: {}", col_name, file_path));
+            } 
         }
 
         if let Some(value) = try_parse_col_type(type_name) {
             cols.push((String::from(name), value));
         } else {
-            eprintln!("ERROR: unknown column type at line {i} in a file {file_path}");
-            exit(1);
+            return Err(format!("ERROR: unknown column type at line {} in a file {}", i + 1, file_path));
         } 
     }
 
-    TableSchema { name, cols }
+    Ok(TableSchema { name: name.to_string(), cols })
 }
 
 fn try_parse_op(op: &str) -> Option<OpType> {
@@ -134,7 +163,7 @@ fn try_parse_op(op: &str) -> Option<OpType> {
     }
 }
 
-fn parse_querry(query: &str) -> Option<Vec<Token>> {
+fn parse_query(query: &str) -> Option<Vec<Token>> {
     let mut tokens: Vec<Token> = vec![];
     let mut query = query.clone();
     loop {
@@ -453,6 +482,12 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
         }
     }
 
+    if words.len() > 0 {
+        eprintln!("WARNING: {0} unused words in the stack", words.len());
+    }
+    if conditions.len() > 0 {
+        eprintln!("WARNING: {0} unused conditions in the stack", conditions.len());
+    }
     Some(temp_table)
 }
 
@@ -557,8 +592,13 @@ enum Mode {
 fn main() {
     let file_path = "./tables/stuff.tbls";
     let schema = parse_table_schema(file_path);
+    if let Err(err) = schema {
+        eprintln!("{}", err);
+        exit(1);
+    }
+    
     let mut table = Table {
-       schema: schema.clone(),
+       schema: schema.unwrap().clone(),
        rows: vec![],
     };
 
@@ -614,21 +654,9 @@ fn main() {
                 match query.as_str().trim() {
                     "exit" => mode = Mode::Cmd,
                     _ => {
-                        let tokens = parse_querry(query.as_str());
-                        if tokens == None {
-                            continue; 
-                        }
-                        let result_table = execute_query(&tokens.unwrap(), &mut table);
-                        // TODO: implement Display trait for Table
-                        if let Some(table) = result_table {
-                            for row in table.rows {
-                                for word in row {
-                                    match word {
-                                        WordType::Int(value) => print!("{value:>5}"),
-                                        WordType::Str(value) => print!("{value:>20}"),
-                                    }
-                                }
-                                println!();
+                        if let Some(tokens) = parse_query(query.as_str()) {
+                            if let Some(result_table) = execute_query(&tokens, &mut table) {
+                                print!("{result_table}");
                             }
                         }
                     },
