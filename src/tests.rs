@@ -2,6 +2,7 @@
 mod tests {
     use crate::*;
     
+    // --- parse_table_schema() ---
     #[test]
     fn valid_table_schema() {
         let schema = parse_table_schema("./src/tests_input/valid_table_schema.tbls");
@@ -73,6 +74,7 @@ mod tests {
         }
     }
 
+    // --- parse_query() ---
     #[test]
     fn valid_query() {
         let query = "id name select id 10 > filter-and";
@@ -111,6 +113,92 @@ mod tests {
     fn unclosed_string() {
         let query = "3 \"John Watson 20 insert";
         if let Err(err) = parse_query(query) {
+            assert!(false, "{}", err);
+        }
+    }
+
+    // --- logical_op_check() ---
+    #[test]
+    fn valid_logical_op() {
+        let words = vec![ 
+            WordType::Str("name".to_string()), 
+            WordType::Str("John".to_string()),
+        ];
+        let table = Table {
+            schema: TableSchema {
+                name: "test".to_string(),
+                cols: vec![("name".to_string(), ColType::Str)],
+            },
+            rows: vec![],
+        };
+        let expected = Condition {
+            idx: 0,
+            value: WordType::Str("John".to_string()),
+            op: OpType::Equal,
+        };
+        assert!(expected == logical_op_check(OpType::Equal, &words, &table).unwrap());
+    }
+
+    #[test]
+    #[should_panic(expected = "ERROR: not enough arguments for `==` operation, provided 1 but needed 2")]
+    fn one_argument_for_logic_op() {
+        let words = vec![WordType::Str("name".to_string())];
+        let table = Table {
+            schema: TableSchema {
+                name: "test".to_string(),
+                cols: vec![],
+            },
+            rows: vec![],
+        };
+        if let Err(err) = logical_op_check(OpType::Equal, &words, &table) {
+            assert!(false, "{}", err);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "ERROR: invalid argument for `>` operation, expected string but found Int(10)")]
+    fn not_string_for_col_name() {
+        let words = vec![WordType::Int(10), WordType::Int(5)];
+        let table = Table {
+            schema: TableSchema {
+                name: "test".to_string(),
+                cols: vec![],
+            },
+            rows: vec![],
+        };
+        if let Err(err) = logical_op_check(OpType::More, &words, &table) {
+            assert!(false, "{}", err);
+        }
+    }
+    
+    #[test]
+    #[should_panic(expected = "ERROR: no such column `age` in table `test`")]
+    fn not_existing_column() {
+        let words = vec![WordType::Str("age".to_string()), WordType::Int(5)];
+        let table = Table {
+            schema: TableSchema {
+                name: "test".to_string(),
+                cols: vec![("id".to_string(), ColType::Int)],
+            },
+            rows: vec![],
+        };
+        if let Err(err) = logical_op_check(OpType::More, &words, &table) {
+            assert!(false, "{}", err);
+        }
+    }
+    
+    #[test]
+    #[should_panic(expected = "ERROR: invalid argument for `>` operation expected type Int but found type Str(\"8\")")]
+    fn types_mismatch_between_col_and_word() {
+        let words = vec![WordType::Str("id".to_string()), WordType::Str("8".to_string())];
+        let table = Table {
+            schema: TableSchema {
+                name: "test".to_string(),
+                cols: vec![("id".to_string(), ColType::Int)],
+            },
+            rows: vec![],
+        };
+        if let Err(err) = logical_op_check(OpType::More, &words, &table) {
             assert!(false, "{}", err);
         }
     }

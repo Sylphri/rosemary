@@ -196,14 +196,15 @@ fn parse_query(query: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Condition {
     idx: usize,
     value: WordType,
     op: OpType,
 }
 
-fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Option<Condition> {
+// TODO: Maybe change table with schema
+fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Result<Condition, String> {
     assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in logical_op_check()");
     let op_sym = match op {
         OpType::Equal => "==",
@@ -214,18 +215,13 @@ fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Optio
     };
 
     if words.len() < 2 {
-        eprintln!("ERROR: not enaugh arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
-        return None;
+        return Err(format!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len()));
     }
     
-    let mut col = String::new();
-    match &words[words.len() - 2] {
-        WordType::Str(value) => col = value.clone(),
-        _ => {
-            eprintln!("ERROR: invalid argument for `{op_sym}` operation, expected string but found {0:?}", col);
-            return None;
-        },
-    }
+    let col = match &words[words.len() - 2] {
+        WordType::Str(value) => value.clone(),
+        other => return Err(format!("ERROR: invalid argument for `{}` operation, expected string but found {:?}", op_sym, other)),
+    };
 
     let mut idx = -1;
     for (i, (col_name, _)) in temp_table.schema.cols.iter().enumerate() {
@@ -236,17 +232,15 @@ fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Optio
     }
 
     if idx < 0 {
-        eprintln!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name);
-        return None;
+        return Err(format!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name));
     }
 
     let value = &words[words.len() - 1];
     if !cmp_word_with_col(&value, temp_table.schema.cols[idx as usize].1) {
-        eprintln!("ERROR: invalid argument for `{op_sym}` operation expected type {0:?} but found type {1:?}", temp_table.schema.cols[idx as usize], value);
-        return None;
+        return Err(format!("ERROR: invalid argument for `{}` operation expected type {:?} but found type {:?}", op_sym, temp_table.schema.cols[idx as usize].1, value));
     }
     
-    Some(Condition {
+    Ok(Condition {
         idx: idx as usize,
         value: value.clone(),
         op: op,
@@ -467,13 +461,17 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                             }      
                         } 
                         
-                        if let Some(condition) = logical_op_check(*op, &words, &curr_table) {
-                            conditions.push(condition);
-                            words.pop();
-                            words.pop();
-                        } else {
-                            return None;
-                        }
+                        match logical_op_check(*op, &words, &curr_table) {
+                            Ok(condition) => {
+                                conditions.push(condition);
+                                words.pop();
+                                words.pop();
+                            },
+                            Err(err) => {
+                                eprintln!("{}", err);
+                                return None;
+                            }
+                        } 
                     },
                     OpType::Count => unreachable!(),
                 }
