@@ -163,7 +163,7 @@ fn try_parse_op(op: &str) -> Option<OpType> {
     }
 }
 
-fn parse_query(query: &str) -> Option<Vec<Token>> {
+fn parse_query(query: &str) -> Result<Vec<Token>, String> {
     let mut tokens: Vec<Token> = vec![];
     let mut query = query.clone();
     loop {
@@ -175,13 +175,13 @@ fn parse_query(query: &str) -> Option<Vec<Token>> {
                 tokens.push(Token::Word(WordType::Str(String::from(&query[0..end]))));
                 query = &query[end+1..];
             } else {
-                eprintln!("ERROR: unclosed string literal in a query");
-                return None;
+                return Err(String::from("ERROR: unclosed string literal in a query"));
             }
         } else {
-            let end = query.find(char::is_whitespace).unwrap_or_else(|| {
-                unreachable!();
-            });
+            let end = match query.find(char::is_whitespace) {
+                Some(end) => end,
+                None => query.len(),
+            };
             let word = &query[0..end];
             query = &query[end..];
             if let Some(op) = try_parse_op(word) {
@@ -193,7 +193,7 @@ fn parse_query(query: &str) -> Option<Vec<Token>> {
             }
         }
     }
-    Some(tokens)
+    Ok(tokens)
 }
 
 #[derive(Debug)]
@@ -654,10 +654,13 @@ fn main() {
                 match query.as_str().trim() {
                     "exit" => mode = Mode::Cmd,
                     _ => {
-                        if let Some(tokens) = parse_query(query.as_str()) {
-                            if let Some(result_table) = execute_query(&tokens, &mut table) {
-                                print!("{result_table}");
-                            }
+                        match parse_query(query.as_str()) {
+                            Ok(tokens) => {
+                                if let Some(result_table) = execute_query(&tokens, &mut table) {
+                                    print!("{result_table}");
+                                }
+                            },
+                            Err(err) => eprintln!("{}", err),
                         }
                     },
                 }

@@ -72,4 +72,46 @@ mod tests {
             assert!(false, "{}", err);
         }
     }
+
+    #[test]
+    fn valid_query() {
+        let query = "id name select id 10 > filter-and";
+        let expected = vec![
+            Token::Word(WordType::Str(String::from("id"))),
+            Token::Word(WordType::Str(String::from("name"))),
+            Token::Op(OpType::Select),
+            Token::Word(WordType::Str(String::from("id"))),
+            Token::Word(WordType::Int(10)),
+            Token::Op(OpType::More),
+            Token::Op(OpType::FilterAnd),
+        ];
+        match parse_query(query) {
+            Ok(tokens) => assert!(expected == tokens),
+            Err(err)   => assert!(false, "{}", err),
+        }
+        
+        let query = "id 5 != name \"John Watson\" == delete";
+        let expected = vec![
+            Token::Word(WordType::Str(String::from("id"))),
+            Token::Word(WordType::Int(5)),
+            Token::Op(OpType::NotEqual),
+            Token::Word(WordType::Str(String::from("name"))),
+            Token::Word(WordType::Str(String::from("John Watson"))),
+            Token::Op(OpType::Equal),
+            Token::Op(OpType::Delete),
+        ];
+        match parse_query(query) {
+            Ok(tokens) => assert!(expected == tokens),
+            Err(err)   => assert!(false, "{}", err),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "ERROR: unclosed string literal in a query")]
+    fn unclosed_string() {
+        let query = "3 \"John Watson 20 insert";
+        if let Err(err) = parse_query(query) {
+            assert!(false, "{}", err);
+        }
+    }
 }
