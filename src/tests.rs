@@ -247,4 +247,59 @@ mod tests {
         assert!(result.is_none());
         assert!(database.tables.len() == 0);
     }
+
+    // TODO: rewrite this test for correct databases comparsions
+    // #[test]
+    fn load_database() {
+        let expected = Database {
+            name: "database".to_string(),
+            tables: vec![
+                Table {
+                    schema: TableSchema {
+                        name: "table1".to_string(),
+                        cols: vec![
+                            ("id".to_string(), DataType::Int),
+                            ("name".to_string(), DataType::Str),
+                        ],
+                    },
+                    rows: vec![
+                        vec![
+                            WordType::Int(0),
+                            WordType::Str("John".to_string()),
+                        ],
+                        vec![
+                            WordType::Int(1),
+                            WordType::Str("Dmitriy".to_string()),
+                        ],
+                    ],
+                },
+                Table {
+                    schema: TableSchema {
+                        name: "table2".to_string(),
+                        cols: vec![
+                            ("id".to_string(), DataType::Int),
+                            ("name".to_string(), DataType::Str),
+                            ("age".to_string(), DataType::Int),
+                        ],
+                    },
+                    rows: vec![
+                        vec![
+                            WordType::Int(0),
+                            WordType::Str("John".to_string()),
+                            WordType::Int(25),
+                        ],
+                        vec![
+                            WordType::Int(1),
+                            WordType::Str("Dmitriy".to_string()),
+                            WordType::Int(19),
+                        ],
+                    ],
+                },
+            ]
+        };
+        save_to_file("./src/tests_input/database/", &expected.tables[0]);
+        save_to_file("./src/tests_input/database/", &expected.tables[1]);
+        let database = load_database_from("./src/tests_input/database").unwrap();
+        assert!(database == expected);
+    }
 }

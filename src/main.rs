@@ -32,7 +32,8 @@ impl fmt::Display for Table {
                 DataType::Str => print!("{name:>20}"),
                 _ => unreachable!(),
             }
-        }
+        
+         }
         println!();
         for row in &self.rows {
             for word in row {
@@ -48,7 +49,7 @@ impl fmt::Display for Table {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Database {
     name: String,
     tables: Vec<Table>,
@@ -278,11 +279,11 @@ fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Resul
 
 fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: OpType) -> bool {
     match condition {
-        OpType::Equal => *a != *b,
+        OpType::Equal    => *a != *b,
         OpType::NotEqual => *a == *b,
-        OpType::Less => *a >= *b,
-        OpType::More => *a <= *b,
-        _ => unreachable!(),
+        OpType::Less     => *a >= *b,
+        OpType::More     => *a <= *b,
+        _                => unreachable!(),
     }
 }
 
@@ -613,11 +614,18 @@ fn execute_query(query: &Vec<Token>, database: &mut Database) -> Option<Table> {
     temp_table
 }
 
-fn read_from_file(table: &mut Table) {
-    let file_path = format!("./tables/{0}.tbl", table.schema.name);
-    let mut file = File::open(&file_path).unwrap_or_else(|err| {
-        eprintln!("ERROR: unable to open the file {file_path}: {err}");
-        exit(1);
+fn read_from_file(dir: &str, schema: TableSchema) -> Table {
+    let mut table = Table {
+        schema: schema,
+        rows: vec![],
+    };
+    
+    let file_path = format!("{}/{}.tbl", dir, table.schema.name);
+    let mut file = File::open(&file_path).unwrap_or_else(|_| {
+        File::create(&file_path).unwrap_or_else(|err| {
+            eprintln!("ERROR: unable to create file {}: {}", file_path, err);
+            exit(1);
+        })
     });
 
     let mut row_len = 0;
@@ -667,23 +675,25 @@ fn read_from_file(table: &mut Table) {
         }
         table.rows.push(row);
     }  
+
+    table
 }
 
-fn save_to_file(table: &Table) {
-    let file_path = format!("./tables/{0}.tbl", table.schema.name);
-    let mut file = File::create(&file_path).unwrap_or_else(|err| {
-        eprintln!("ERROR: unable to create a file for table: {err}");
-        exit(1);
-    });
+fn save_to_file(dir: &str, table: &Table) -> Result<(), String> {
+    let file_path = format!("{}/{}.tbl", dir, table.schema.name);
+    let mut file = match File::create(&file_path) {
+        Ok(file) => file,
+        Err(err) => return Err(format!("ERROR: unable to create a file for table: {err}")),
+    };
     
     for row in &table.rows {
         for word in row {
             match word {
                 WordType::Int(value) => {
-                    file.write_all(&value.to_ne_bytes()).unwrap_or_else(|err| {
-                        eprintln!("ERROR: unable to write to the file {file_path}: {err}");
-                        exit(1);
-                    });     
+                    match file.write_all(&value.to_ne_bytes()) {
+                        Err(err) => return Err(format!("ERROR: unable to write to the file {file_path}: {err}")),
+                        Ok(_) => (),
+                    };     
                 },
                 WordType::Str(value) => {
                     let mut value = &value[0..];
@@ -693,15 +703,59 @@ fn save_to_file(table: &Table) {
                     }
                     let mut str_buf: [u8; 50] = [0; 50];
                     str_buf[0..value.len()].clone_from_slice(&value.as_bytes());
-                    file.write_all(&str_buf).unwrap_or_else(|err| {
-                        eprintln!("ERROR: unable to write to the file {file_path}: {err}");
-                        exit(1);
-                    });     
+                    match file.write_all(&str_buf) {
+                        Err(err) => return Err(format!("ERROR: unable to write to the file {file_path}: {err}")),
+                        Ok(_) => (),
+                    };     
                 },
                 _ => unreachable!(),
             }
         } 
     }
+
+    Ok(())
+}
+
+fn load_database_from(path: &str) -> Result<Database, String> {
+    let paths = match fs::read_dir(path) {
+        Ok(paths) => paths,
+        Err(err) => return Err(format!("ERROR: unable to open database directory {}: {}", path, err)),
+    };
+    
+    let mut database = Database {
+        name: "database".to_string(),
+        tables: vec![],
+    };
+    
+    for file_path in paths {
+        let file = format!("{}", match file_path {
+            Ok(path) => path,
+            Err(err) => return Err(format!("ERROR: something went wrong: {}", err)),
+        }.path().display());
+
+        if !file.ends_with(".tbls") {
+            continue; 
+        }
+
+        let schema = match parse_table_schema(&file) {
+            Ok(schema) => schema,
+            Err(err) => return Err(err),
+        };
+
+        database.tables.push(read_from_file(path, schema)); 
+    }
+
+    Ok(database)
+}
+
+fn save_database_to(path: &str, database: &Database) -> Result<(), String> {
+    for table in &database.tables {
+        if let Err(err) = save_to_file(path, &table) {
+            return Err(err);
+        }
+    } 
+
+    Ok(())
 }
 
 #[derive(PartialEq)]
@@ -711,26 +765,8 @@ enum Mode {
     MlQuery,
 }
 
-// TODO: Make some tests
 fn main() {
-    let file_path = "./tables/stuff.tbls";
-    let schema = parse_table_schema(file_path);
-    if let Err(err) = schema {
-        eprintln!("{}", err);
-        exit(1);
-    }
-    
-    let mut database = Database {
-        name: "database".to_string(),
-        tables: vec![
-            Table {
-               schema: schema.unwrap().clone(),
-               rows: vec![],
-            },
-        ],
-    };
-
-    read_from_file(&mut database.tables[0]);
+    let mut database = load_database_from("./database").unwrap();
 
     let mut quit = false;
     let mut mode = Mode::Cmd;
@@ -795,5 +831,8 @@ fn main() {
         }
     }
 
-    save_to_file(&database.tables[0]);
+    if let Err(err) = save_database_to("./database", &database) {
+        eprintln!("{}", err);
+        exit(1);
+    }
 }
