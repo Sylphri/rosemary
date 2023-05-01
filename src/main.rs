@@ -8,16 +8,16 @@ use std::process::exit;
 
 mod tests;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct TableSchema {
     name: String,
-    cols: Vec<(String, ColType)>,
+    cols: Vec<(String, DataType)>,
 }
 
 // TODO: think about redisign of token system
 type Row = Vec<WordType>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Table {
     schema: TableSchema,
     rows: Vec<Row>,
@@ -25,11 +25,11 @@ struct Table {
 
 impl fmt::Display for Table {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        assert!(ColType::Count as u8 == 2, "Exhaustive ColType handling in Table::fmt()");
+        assert!(DataType::Count as u8 == 2, "Exhaustive DataType handling in Table::fmt()");
         for (name, col_type) in &self.schema.cols {
             match col_type {
-                ColType::Int => print!("{name:>5}"),
-                ColType::Str => print!("{name:>20}"),
+                DataType::Int => print!("{name:>5}"),
+                DataType::Str => print!("{name:>20}"),
                 _ => unreachable!(),
             }
         }
@@ -39,12 +39,19 @@ impl fmt::Display for Table {
                 match word {
                     WordType::Int(value) => print!("{value:>5}"),
                     WordType::Str(value) => print!("{value:>20}"),
+                    _ => unreachable!(),
                 }
             }
             println!();
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct Database {
+    name: String,
+    tables: Vec<Table>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -58,6 +65,8 @@ enum OpType {
     NotEqual,
     Less,
     More,
+    Create,
+    DropOp,
     Count,
 }
 
@@ -65,6 +74,7 @@ enum OpType {
 enum WordType {
     Int(i32),
     Str(String),
+    Type(DataType),
 }
 
 // TODO: Introduce a sized string type
@@ -75,25 +85,26 @@ enum Token {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum ColType {
+enum DataType {
     Int,
     Str,
     Count,
 }
 
-fn cmp_word_with_col(word: &WordType, col_type: ColType) -> bool {
-    assert_eq!(ColType::Count as u8, 2);
+fn cmp_word_with_col(word: &WordType, col_type: DataType) -> bool {
+    assert_eq!(DataType::Count as u8, 2);
     match word {
-        WordType::Int(_) => return col_type == ColType::Int,
-        WordType::Str(_) => return col_type == ColType::Str,
+        WordType::Int(_) => return col_type == DataType::Int,
+        WordType::Str(_) => return col_type == DataType::Str,
+        _ => unreachable!(),
     } 
 }
 
-fn try_parse_col_type(col_type: &str) -> Option<ColType> {
-    assert_eq!(ColType::Count as u8, 2);
+fn try_parse_data_type(col_type: &str) -> Option<DataType> {
+    assert_eq!(DataType::Count as u8, 2);
     match col_type {
-        "Int" => Some(ColType::Int),
-        "Str" => Some(ColType::Str),
+        "Int" => Some(DataType::Int),
+        "Str" => Some(DataType::Str),
         _ => None,
     }
 } 
@@ -137,7 +148,7 @@ fn parse_table_schema(file_path: &str) -> Result<TableSchema, String> {
             } 
         }
 
-        if let Some(value) = try_parse_col_type(type_name) {
+        if let Some(value) = try_parse_data_type(type_name) {
             cols.push((String::from(name), value));
         } else {
             return Err(format!("ERROR: unknown column type at line {} in a file {}", i + 1, file_path));
@@ -148,18 +159,20 @@ fn parse_table_schema(file_path: &str) -> Result<TableSchema, String> {
 }
 
 fn try_parse_op(op: &str) -> Option<OpType> {
-    assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in try_parse_op()");
+    assert!(OpType::Count as u8 == 11, "Exhaustive OpType handling in try_parse_op()");
     match op {
-        "select" => Some(OpType::Select),
-        "insert" => Some(OpType::Insert),
-        "delete" => Some(OpType::Delete),
+        "select"     => Some(OpType::Select),
+        "insert"     => Some(OpType::Insert),
+        "delete"     => Some(OpType::Delete),
         "filter-and" => Some(OpType::FilterAnd),
-        "filter-or" => Some(OpType::FilterOr),
-        "==" => Some(OpType::Equal),
-        "!=" => Some(OpType::NotEqual),
-        ">" => Some(OpType::More),
-        "<" => Some(OpType::Less),
-        _ => None,  
+        "filter-or"  => Some(OpType::FilterOr),
+        "create"     => Some(OpType::Create),
+        "drop"       => Some(OpType::DropOp),
+        "=="         => Some(OpType::Equal),
+        "!="         => Some(OpType::NotEqual),
+        ">"          => Some(OpType::More),
+        "<"          => Some(OpType::Less),
+        _            => None,  
     }
 }
 
@@ -169,6 +182,18 @@ fn parse_query(query: &str) -> Result<Vec<Token>, String> {
     loop {
         query = query.trim_start();
         if query.len() == 0 { break; }
+        let end = match query.find(char::is_whitespace) {
+            Some(end) => end,
+            None => query.len(),
+        };
+        let word = &query[0..end];
+        if let Some(op) = try_parse_op(word) {
+            tokens.push(Token::Op(op)); 
+            query = &query[end..];
+            continue;
+        }
+
+        query = query.trim_start_matches(&['(', ')']);
         if query.bytes().next().unwrap() == b'"' {
             query = &query[1..]; 
             if let Some(end) = query.find('"') {
@@ -182,10 +207,14 @@ fn parse_query(query: &str) -> Result<Vec<Token>, String> {
                 Some(end) => end,
                 None => query.len(),
             };
-            let word = &query[0..end];
+            let mut word = (&query[0..end]).to_string();
+            word = word.replace("(", "");
+            word = word.replace(")", "");
             query = &query[end..];
-            if let Some(op) = try_parse_op(word) {
-                tokens.push(Token::Op(op)); 
+            if let Some(op) = try_parse_op(&word) {
+                tokens.push(Token::Op(op));
+            } else if let Some(data_type) = try_parse_data_type(&word) {
+                tokens.push(Token::Word(WordType::Type(data_type)));
             } else if let Ok(value) = word.parse::<i32>() {
                 tokens.push(Token::Word(WordType::Int(value)));
             } else {
@@ -205,7 +234,7 @@ struct Condition {
 
 // TODO: Maybe change table with schema
 fn logical_op_check(op: OpType, words: &[WordType], temp_table: &Table) -> Result<Condition, String> {
-    assert!(OpType::Count as u8 == 9, "Exhaustive OpType handling in logical_op_check()");
+    assert!(OpType::Count as u8 == 11, "Exhaustive OpType handling in logical_op_check()");
     let op_sym = match op {
         OpType::Equal => "==",
         OpType::NotEqual => "!=",
@@ -257,17 +286,10 @@ fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: OpType) -> bool {
     }
 }
 
-fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
+fn execute_query(query: &Vec<Token>, database: &mut Database) -> Option<Table> {
     let mut words: Vec<WordType> = vec![];
     let mut conditions: Vec<Condition> = vec![];
-    let mut temp_table = Table {
-        schema: TableSchema {
-            name: String::from("temp"),
-            cols: vec![],
-        },
-        rows: vec![],
-    };
-    
+    let mut temp_table = None;    
     for (token_id, token) in query.iter().enumerate() {
         match token {
             Token::Op(op) => {
@@ -282,17 +304,17 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                             match word {
                                 WordType::Str(value) => {
                                     if value == "*" {
-                                        row_idxs.append(&mut (0..table.schema.cols.len()).collect::<Vec<usize>>());
+                                        row_idxs.append(&mut (0..database.tables[0].schema.cols.len()).collect::<Vec<usize>>());
                                         continue;
                                     }
 
-                                    for (i, (col_name, _)) in table.schema.cols.iter().enumerate() {
+                                    for (i, (col_name, _)) in database.tables[0].schema.cols.iter().enumerate() {
                                         if col_name == value {
                                             row_idxs.push(i);
                                             continue 'outer;
                                         }
                                     }
-                                    eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, table.schema.name);
+                                    eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[0].schema.name);
                                     return None;
                                 },
                                 _ => {
@@ -308,15 +330,19 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         };
                         
                         for idx in &row_idxs {
-                            schema.cols.push(table.schema.cols[*idx].clone());
+                            schema.cols.push(database.tables[0].schema.cols[*idx].clone());
                         }
 
-                        temp_table = Table {
+                        temp_table = Some(Table {
                             schema,
                             rows: vec![],
-                        };
+                        });
 
-                        for row in &table.rows {
+                        let temp_table = match temp_table {
+                            Some(ref mut table) => table,
+                            None => unreachable!(),
+                        };
+                        for row in &database.tables[0].rows {
                             let mut temp_row = vec![];
                             for idx in &row_idxs {
                                 temp_row.push(row[*idx as usize].clone());
@@ -326,25 +352,25 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         words.clear();
                     },
                     OpType::Insert => {
-                        let col_count = table.schema.cols.len(); 
+                        let col_count = database.tables[0].schema.cols.len(); 
                         if words.len() < col_count {
                             eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words.len(), col_count);
                             return None;
                         }
 
                         for (i, word) in words[words.len() - col_count..words.len()].iter().enumerate() {
-                            if !cmp_word_with_col(word, table.schema.cols[i].1) {
-                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, table.schema.cols[i].1);
+                            if !cmp_word_with_col(word, database.tables[0].schema.cols[i].1) {
+                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, database.tables[0].schema.cols[i].1);
                                 return None;
                             }
                         }
 
-                        table.rows.push(words[words.len() - col_count..words.len()].to_vec());
+                        database.tables[0].rows.push(words[words.len() - col_count..words.len()].to_vec());
                         words.clear();
                     },
                     OpType::Delete => {
                         let mut rows_to_delete = vec![];
-                        for (i, row) in table.rows.iter().enumerate() {
+                        for (i, row) in database.tables[0].rows.iter().enumerate() {
                             let mut filtered_cols = 0;
                             for condition in &conditions {
                                 assert!(OpType::Count as u8 == 9, "Exhaustive logic OpTypes handling");
@@ -366,7 +392,8 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                                         } else {
                                             unreachable!();
                                         }
-                                    }
+                                    },
+                                    _ => unreachable!(),
                                 }
                             }
                             if filtered_cols == conditions.len() {
@@ -376,12 +403,16 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
 
                         let mut deleted = 0;
                         for row in rows_to_delete {
-                            table.rows.remove(row - deleted);
+                            database.tables[0].rows.remove(row - deleted);
                             deleted += 1;
                         }       
                         conditions.clear();
                     },
                     OpType::FilterAnd => {
+                        let mut temp_table = match temp_table {
+                            Some(ref mut  table) => table,
+                            None => todo!(),
+                        };
                         let mut filtered_rows = vec![];
                         for row in &temp_table.rows {
                             let mut filtered = false;
@@ -401,7 +432,8 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                                         } else {
                                             unreachable!();
                                         }
-                                    }
+                                    },
+                                    _ => unreachable!(),
                                 }
                                 if filtered { break; }
                             }
@@ -415,6 +447,10 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         conditions.clear();
                     },
                     OpType::FilterOr => {
+                        let mut temp_table = match temp_table {
+                            Some(ref mut table) => table,
+                            None => todo!(),
+                        };
                         let mut filtered_rows = vec![];
                         for row in &temp_table.rows {
                             let mut filtered_count = 0;
@@ -434,7 +470,8 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                                         } else {
                                             unreachable!();
                                         }
-                                    }
+                                    },
+                                    _ => unreachable!(),
                                 }
                             }
 
@@ -447,14 +484,17 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                         conditions.clear();
                     },
                     op @ OpType::Equal | op @ OpType::NotEqual | op @ OpType::Less | op @ OpType::More => {
-                        let mut curr_table = &temp_table;
+                        let mut curr_table = match temp_table {
+                            Some(ref table) => table,
+                            None => todo!(),
+                        };
                         let mut query = query[token_id + 1..].iter();
                         while let Some(token) = query.next() {
                             match token {
                                 Token::Word(_) => (),
                                 Token::Op(op) => {
                                     if OpType::Delete == *op {
-                                        curr_table = &table;
+                                        curr_table = &database.tables[0];
                                         break;
                                     }
                                 }
@@ -473,6 +513,89 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
                             }
                         } 
                     },
+                    OpType::Create => {
+                        if words.len() == 0 {
+                            eprintln!("ERROR: no arguments provided for `create` operation");
+                            return None;
+                        }
+
+                        let table_name = match &words[0] {
+                            WordType::Str(name) => name.clone(),
+                            other => {
+                                eprintln!("ERROR: name of the table expected to be a string but found `{:?}`", other);
+                                return None;
+                            },
+                        };
+
+                        let mut words_iter = words.iter();
+                        words_iter.next();
+                        let mut cols = vec![];
+                        while let Some(word) = words_iter.next() {
+                            let col_name = match word {
+                                WordType::Str(name) => name,
+                                other => {
+                                    eprintln!("ERROR: name of the column expected to be a string but found `{:?}`", other);
+                                    return None;
+                                },
+                            };
+
+                            let col_type = match words_iter.next() {
+                                Some(data_type) => data_type,
+                                None => {
+                                    eprintln!("ERROR: column type is not provided");
+                                    return None;
+                                },
+                            };
+
+                            let col_type = match col_type {
+                                WordType::Type(data_type) => data_type,
+                                other => {
+                                    eprintln!("ERROR: unknown column type '{:?}' in `create` operation", other);
+                                    return None;
+                                },
+                            };
+
+                            cols.push((col_name.clone(), col_type.clone()));
+                        }
+
+                        database.tables.push(Table {
+                            schema: TableSchema {
+                                name: table_name,
+                                cols: cols,
+                            },
+                            rows: vec![],
+                        });
+                        words.clear();
+                    },
+                    OpType::DropOp => {
+                        if words.len() < 1 {
+                            eprintln!("ERROR: no arguments provided for `drop` operation");
+                            return None;
+                        }
+
+                        let table_name = match &words[words.len() - 1] {
+                            WordType::Str(name) => name.clone(),
+                            other => {
+                                eprintln!("ERROR: name of the table expected to be a string but found `{:?}`", other);
+                                return None;
+                            },
+                        };
+
+                        let mut table_idx = -1; 
+                        for (i, table) in database.tables.iter().enumerate() {
+                            if table.schema.name == table_name {
+                                table_idx = i as i32;
+                                break;
+                            }
+                        }
+
+                        if table_idx < 0 {
+                            eprintln!("ERROR: no such table '{}' in database '{}'", table_name, database.name);
+                            return None;
+                        }
+
+                        database.tables.remove(table_idx as usize);
+                    }
                     OpType::Count => unreachable!(),
                 }
             },
@@ -486,7 +609,8 @@ fn execute_query(query: &Vec<Token>, table: &mut Table) -> Option<Table> {
     if conditions.len() > 0 {
         eprintln!("WARNING: {0} unused conditions in the stack", conditions.len());
     }
-    Some(temp_table)
+    
+    temp_table
 }
 
 fn read_from_file(table: &mut Table) {
@@ -499,8 +623,8 @@ fn read_from_file(table: &mut Table) {
     let mut row_len = 0;
     for (_, col_type) in &table.schema.cols {
         match col_type {
-            ColType::Int => row_len += 4,
-            ColType::Str => row_len += 50,
+            DataType::Int => row_len += 4,
+            DataType::Str => row_len += 50,
             _ => unreachable!(),
         }
     }
@@ -521,7 +645,7 @@ fn read_from_file(table: &mut Table) {
         let mut row: Row = vec![];
         for (_, col_type) in &table.schema.cols {
             match col_type {
-                ColType::Int => {
+                DataType::Int => {
                     file.read(&mut i32_buf).unwrap_or_else(|err| {
                         eprintln!("ERROR: unable to read from file {file_path}: {err}");
                         exit(1);
@@ -529,7 +653,7 @@ fn read_from_file(table: &mut Table) {
                     
                     row.push(WordType::Int(i32::from_ne_bytes(i32_buf)));
                 },
-                ColType::Str => {
+                DataType::Str => {
                     file.read(&mut str_buf).unwrap_or_else(|err| {
                         eprintln!("ERROR: unable to read from file {file_path}: {err}");
                         exit(1);
@@ -545,7 +669,7 @@ fn read_from_file(table: &mut Table) {
     }  
 }
 
-fn save_to_file(table: Table) {
+fn save_to_file(table: &Table) {
     let file_path = format!("./tables/{0}.tbl", table.schema.name);
     let mut file = File::create(&file_path).unwrap_or_else(|err| {
         eprintln!("ERROR: unable to create a file for table: {err}");
@@ -574,6 +698,7 @@ fn save_to_file(table: Table) {
                         exit(1);
                     });     
                 },
+                _ => unreachable!(),
             }
         } 
     }
@@ -595,12 +720,17 @@ fn main() {
         exit(1);
     }
     
-    let mut table = Table {
-       schema: schema.unwrap().clone(),
-       rows: vec![],
+    let mut database = Database {
+        name: "database".to_string(),
+        tables: vec![
+            Table {
+               schema: schema.unwrap().clone(),
+               rows: vec![],
+            },
+        ],
     };
 
-    read_from_file(&mut table);
+    read_from_file(&mut database.tables[0]);
 
     let mut quit = false;
     let mut mode = Mode::Cmd;
@@ -608,8 +738,8 @@ fn main() {
     while !quit {
         match mode {
             Mode::Cmd => print!("> "),
-            Mode::Query => print!("querry > "),
-            Mode::MlQuery => print!("querry : "),
+            Mode::Query => print!("query > "),
+            Mode::MlQuery => print!("query : "),
         } 
         
         io::stdout().flush().unwrap_or_else(|err| {
@@ -642,8 +772,6 @@ fn main() {
                         mode = Mode::Query;
                     }
                 }
-                buffer = buffer.replace("(", "");
-                buffer = buffer.replace(")", "");
                 query.push_str(&buffer);
                 if mode == Mode::MlQuery {
                     continue;
@@ -654,7 +782,7 @@ fn main() {
                     _ => {
                         match parse_query(query.as_str()) {
                             Ok(tokens) => {
-                                if let Some(result_table) = execute_query(&tokens, &mut table) {
+                                if let Some(result_table) = execute_query(&tokens, &mut database) {
                                     print!("{result_table}");
                                 }
                             },
@@ -667,5 +795,5 @@ fn main() {
         }
     }
 
-    save_to_file(table);
+    save_to_file(&database.tables[0]);
 }

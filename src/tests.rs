@@ -13,11 +13,11 @@ mod tests {
         assert!(schema.name == "TestTable");
         assert!(schema.cols.len() == 3);
         assert!(schema.cols[0].0 == "id");
-        assert!(schema.cols[0].1 == ColType::Int);
+        assert!(schema.cols[0].1 == DataType::Int);
         assert!(schema.cols[1].0 == "name");
-        assert!(schema.cols[1].1 == ColType::Str);
+        assert!(schema.cols[1].1 == DataType::Str);
         assert!(schema.cols[2].0 == "age");
-        assert!(schema.cols[2].1 == ColType::Int);
+        assert!(schema.cols[2].1 == DataType::Int);
     }
 
     #[test]
@@ -127,7 +127,7 @@ mod tests {
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
-                cols: vec![("name".to_string(), ColType::Str)],
+                cols: vec![("name".to_string(), DataType::Str)],
             },
             rows: vec![],
         };
@@ -178,7 +178,7 @@ mod tests {
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
-                cols: vec![("id".to_string(), ColType::Int)],
+                cols: vec![("id".to_string(), DataType::Int)],
             },
             rows: vec![],
         };
@@ -194,12 +194,57 @@ mod tests {
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
-                cols: vec![("id".to_string(), ColType::Int)],
+                cols: vec![("id".to_string(), DataType::Int)],
             },
             rows: vec![],
         };
         if let Err(err) = logical_op_check(OpType::More, &words, &table) {
             assert!(false, "{}", err);
         }
+    }
+
+    #[test]
+    fn create_table() {
+        let query = "clients (id Int) (name Str) create";
+        let mut database = Database {
+            name: "database".to_string(),
+            tables: vec![],
+        }; 
+        let tokens = parse_query(query).unwrap();
+        let result = execute_query(&tokens, &mut database);
+        assert!(result.is_none());
+        assert!(database.tables.len() == 1);
+        let expected = Table {
+            schema: TableSchema {
+                name: "clients".to_string(),
+                cols: vec![
+                    ("id".to_string(), DataType::Int),
+                    ("name".to_string(), DataType::Str),
+                ],
+            },
+            rows: vec![],
+        };
+        assert!(expected == database.tables[0]);
+    }
+
+    #[test]
+    fn drop_table() {
+        let query = "clients drop";
+        let mut database = Database {
+            name: "database".to_string(),
+            tables: vec![
+                Table {
+                    schema: TableSchema {
+                        name: "clients".to_string(),
+                        cols: vec![],
+                    },
+                    rows: vec![],
+                },
+            ],
+        }; 
+        let tokens = parse_query(query).unwrap();
+        let result = execute_query(&tokens, &mut database);
+        assert!(result.is_none());
+        assert!(database.tables.len() == 0);
     }
 }
