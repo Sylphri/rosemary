@@ -1,7 +1,7 @@
 use std::io;
 use std::io::Write;
 use std::io::Read;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::fs;
 use std::fmt;
 use std::process::exit;
@@ -109,6 +109,14 @@ fn try_parse_data_type(col_type: &str) -> Option<DataType> {
         _ => None,
     }
 } 
+
+fn data_type_to_string(data_type: DataType) -> String {
+    match data_type {
+        DataType::Int => "Int".to_string(),
+        DataType::Str => "Str".to_string(),
+        DataType::Count => unreachable!(),
+    }
+}
 
 fn parse_table_schema(file_path: &str) -> Result<TableSchema, String> {
     let file = File::open(file_path);
@@ -301,21 +309,49 @@ fn execute_query(query: &Vec<Token>, database: &mut Database) -> Option<Table> {
                             return None;
                         }
                         let mut row_idxs = vec![];
-                        'outer: for word in &words {
+                        let mut words_iter = words.iter();
+                        let table_name = match words_iter.next() {
+                            Some(name) => match name {
+                                WordType::Str(name) => name.clone(),
+                                other => {
+                                    eprintln!("ERROR: table name expected to be string but found '{:?}'", other);
+                                    return None;
+                                },
+                            },
+                            None => {
+                                eprintln!("ERROR: table name not provided for `select` operation");
+                                return None;
+                            }
+                        };
+
+                        let mut table_idx = -1;
+                        for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
+                            if table_name == schema.name {
+                                table_idx = i as i32;
+                                break;
+                            }
+                        }
+
+                        if table_idx < 0 {
+                            eprintln!("ERROR: not such table '{}' in '{}' database", table_name, database.name);
+                            return None;
+                        }
+                        
+                        'outer: for word in words_iter {
                             match word {
                                 WordType::Str(value) => {
                                     if value == "*" {
-                                        row_idxs.append(&mut (0..database.tables[0].schema.cols.len()).collect::<Vec<usize>>());
+                                        row_idxs.append(&mut (0..database.tables[table_idx as usize].schema.cols.len()).collect::<Vec<usize>>());
                                         continue;
                                     }
 
-                                    for (i, (col_name, _)) in database.tables[0].schema.cols.iter().enumerate() {
+                                    for (i, (col_name, _)) in database.tables[table_idx as usize].schema.cols.iter().enumerate() {
                                         if col_name == value {
                                             row_idxs.push(i);
                                             continue 'outer;
                                         }
                                     }
-                                    eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[0].schema.name);
+                                    eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[table_idx as usize].schema.name);
                                     return None;
                                 },
                                 _ => {
@@ -331,7 +367,7 @@ fn execute_query(query: &Vec<Token>, database: &mut Database) -> Option<Table> {
                         };
                         
                         for idx in &row_idxs {
-                            schema.cols.push(database.tables[0].schema.cols[*idx].clone());
+                            schema.cols.push(database.tables[table_idx as usize].schema.cols[*idx].clone());
                         }
 
                         temp_table = Some(Table {
@@ -343,7 +379,7 @@ fn execute_query(query: &Vec<Token>, database: &mut Database) -> Option<Table> {
                             Some(ref mut table) => table,
                             None => unreachable!(),
                         };
-                        for row in &database.tables[0].rows {
+                        for row in &database.tables[table_idx as usize].rows {
                             let mut temp_row = vec![];
                             for idx in &row_idxs {
                                 temp_row.push(row[*idx as usize].clone());
@@ -353,20 +389,48 @@ fn execute_query(query: &Vec<Token>, database: &mut Database) -> Option<Table> {
                         words.clear();
                     },
                     OpType::Insert => {
-                        let col_count = database.tables[0].schema.cols.len(); 
-                        if words.len() < col_count {
-                            eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words.len(), col_count);
+                        if words.len() < 1 {
+                            eprintln!("ERROR: table name not provided for `insert` operation");
+                            return None;
+                        }
+                        
+                        let table_name = match &words[0] {
+                            WordType::Str(name) => name.clone(),
+                            other => {
+                                eprintln!("ERROR: table name expected to be string but found '{:?}'", other);
+                                return None;
+                            }
+                        };
+                        
+                        let mut table_idx = -1;
+                        for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
+                            if table_name == schema.name {
+                                table_idx = i as i32;
+                                break;
+                            }
+                        }
+
+                        if table_idx < 0 {
+                            eprintln!("ERROR: not such table '{}' in '{}' database", table_name, database.name);
+                            return None;
+                        }
+                        
+                        let words_slice = &words[1..];
+                        let col_count = database.tables[table_idx as usize].schema.cols.len(); 
+                        if words_slice.len() < col_count {
+                            eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words_slice.len(), col_count);
                             return None;
                         }
 
-                        for (i, word) in words[words.len() - col_count..words.len()].iter().enumerate() {
-                            if !cmp_word_with_col(word, database.tables[0].schema.cols[i].1) {
-                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, database.tables[0].schema.cols[i].1);
+                        for (i, word) in words_slice[words_slice.len() - col_count..words_slice.len()].iter().enumerate() {
+                            if !cmp_word_with_col(word, database.tables[table_idx as usize].schema.cols[i].1) {
+                                eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, database.tables[table_idx as usize].schema.cols[i].1);
                                 return None;
                             }
                         }
 
-                        database.tables[0].rows.push(words[words.len() - col_count..words.len()].to_vec());
+                        database.tables[table_idx as usize].rows.push(words_slice[words_slice.len() - col_count..words_slice.len()].to_vec());
+                        // TODO: delete only used words
                         words.clear();
                     },
                     OpType::Delete => {
@@ -748,8 +812,34 @@ fn load_database_from(path: &str) -> Result<Database, String> {
     Ok(database)
 }
 
+fn save_schema_to(path: &str, schema: &TableSchema) -> Result<(), String> {
+    let path = format!("{}/{}.tbls", path, schema.name);
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(path.clone()) {
+            Ok(file) => file,
+            Err(err) => return Err(format!("ERROR: couldn't create a file {}: {}", path.clone(), err)),
+        };
+    
+    if let Err(err) = writeln!(file, "{}", schema.name) {
+        return Err(format!("ERROR: couldn't write to file {}: {}", path, err));
+    } 
+   
+    for col in &schema.cols {
+        if let Err(err) = writeln!(file, "{}:{}", col.0, data_type_to_string(col.1)) {
+            return Err(format!("ERROR: couldn't write to file {}: {}", path, err));
+        } 
+    }
+
+    Ok(())
+}
+
 fn save_database_to(path: &str, database: &Database) -> Result<(), String> {
     for table in &database.tables {
+        if let Err(err) = save_schema_to(path, &table.schema) {
+            return Err(err);
+        }
         if let Err(err) = save_to_file(path, &table) {
             return Err(err);
         }
