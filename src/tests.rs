@@ -12,12 +12,12 @@ mod tests {
         let schema = schema.unwrap();
         assert!(schema.name == "TestTable");
         assert!(schema.cols.len() == 3);
-        assert!(schema.cols[0].0 == "id");
-        assert!(schema.cols[0].1 == DataType::Int);
-        assert!(schema.cols[1].0 == "name");
-        assert!(schema.cols[1].1 == DataType::Str);
-        assert!(schema.cols[2].0 == "age");
-        assert!(schema.cols[2].1 == DataType::Int);
+        assert!(schema.cols[0].name == "id");
+        assert!(schema.cols[0].data_type == DataType::Int);
+        assert!(schema.cols[1].name == "name");
+        assert!(schema.cols[1].data_type == DataType::Str);
+        assert!(schema.cols[2].name == "age");
+        assert!(schema.cols[2].data_type == DataType::Int);
     }
 
     #[test]
@@ -79,13 +79,13 @@ mod tests {
     fn valid_query() {
         let query = "id name select id 10 > filter-and";
         let expected = vec![
-            Token::Word(WordType::Str(String::from("id"))),
-            Token::Word(WordType::Str(String::from("name"))),
-            Token::Op(OpType::Select),
-            Token::Word(WordType::Str(String::from("id"))),
-            Token::Word(WordType::Int(10)),
-            Token::Op(OpType::More),
-            Token::Op(OpType::FilterAnd),
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("name"))},
+            Op::Select,
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
+            Op::PushWord {data_type: DataType::Int, word_type: WordType::Int(10)},
+            Op::More,
+            Op::FilterAnd,
         ];
         match parse_query(query) {
             Ok(tokens) => assert!(expected == tokens),
@@ -94,13 +94,13 @@ mod tests {
         
         let query = "id 5 != name \"John Watson\" == delete";
         let expected = vec![
-            Token::Word(WordType::Str(String::from("id"))),
-            Token::Word(WordType::Int(5)),
-            Token::Op(OpType::NotEqual),
-            Token::Word(WordType::Str(String::from("name"))),
-            Token::Word(WordType::Str(String::from("John Watson"))),
-            Token::Op(OpType::Equal),
-            Token::Op(OpType::Delete),
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
+            Op::PushWord {data_type: DataType::Int, word_type: WordType::Int(5)},
+            Op::NotEqual,
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("name"))},
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("John Watson"))},
+            Op::Equal,
+            Op::Delete,
         ];
         match parse_query(query) {
             Ok(tokens) => assert!(expected == tokens),
@@ -121,28 +121,28 @@ mod tests {
     #[test]
     fn valid_logical_op() {
         let words = vec![ 
-            WordType::Str("name".to_string()), 
-            WordType::Str("John".to_string()),
+            (DataType::Str, WordType::Str("name".to_string())), 
+            (DataType::Str, WordType::Str("John".to_string())),
         ];
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
-                cols: vec![("name".to_string(), DataType::Str)],
+                cols: vec![Col {name: "name".to_string(), data_type: DataType::Str}],
             },
             rows: vec![],
         };
         let expected = Condition {
             idx: 0,
             value: WordType::Str("John".to_string()),
-            op: OpType::Equal,
+            op: Op::Equal,
         };
-        assert!(expected == logical_op_check(OpType::Equal, &words, &table).unwrap());
+        assert!(expected == logical_op_check(Op::Equal, &words, &table).unwrap());
     }
 
     #[test]
     #[should_panic(expected = "ERROR: not enough arguments for `==` operation, provided 1 but needed 2")]
     fn one_argument_for_logic_op() {
-        let words = vec![WordType::Str("name".to_string())];
+        let words = vec![(DataType::Str, WordType::Str("name".to_string()))];
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
@@ -150,7 +150,7 @@ mod tests {
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(OpType::Equal, &words, &table) {
+        if let Err(err) = logical_op_check(Op::Equal, &words, &table) {
             assert!(false, "{}", err);
         }
     }
@@ -158,7 +158,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "ERROR: invalid argument for `>` operation, expected string but found Int(10)")]
     fn not_string_for_col_name() {
-        let words = vec![WordType::Int(10), WordType::Int(5)];
+        let words = vec![
+            (DataType::Int, WordType::Int(10)), 
+            (DataType::Int, WordType::Int(5))
+        ];
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
@@ -166,7 +169,7 @@ mod tests {
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(OpType::More, &words, &table) {
+        if let Err(err) = logical_op_check(Op::More, &words, &table) {
             assert!(false, "{}", err);
         }
     }
@@ -174,15 +177,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "ERROR: no such column `age` in table `test`")]
     fn not_existing_column() {
-        let words = vec![WordType::Str("age".to_string()), WordType::Int(5)];
+        let words = vec![
+            (DataType::Str, WordType::Str("age".to_string())), 
+            (DataType::Int, WordType::Int(5))
+        ];
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
-                cols: vec![("id".to_string(), DataType::Int)],
+                cols: vec![Col {name: "id".to_string(), data_type: DataType::Int}],
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(OpType::More, &words, &table) {
+        if let Err(err) = logical_op_check(Op::More, &words, &table) {
             assert!(false, "{}", err);
         }
     }
@@ -190,15 +196,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "ERROR: invalid argument for `>` operation expected type Int but found type Str(\"8\")")]
     fn types_mismatch_between_col_and_word() {
-        let words = vec![WordType::Str("id".to_string()), WordType::Str("8".to_string())];
+        let words = vec![
+            (DataType::Str, WordType::Str("id".to_string())), 
+            (DataType::Str, WordType::Str("8".to_string()))
+        ];
         let table = Table {
             schema: TableSchema {
                 name: "test".to_string(),
-                cols: vec![("id".to_string(), DataType::Int)],
+                cols: vec![Col {name: "id".to_string(), data_type: DataType::Int}],
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(OpType::More, &words, &table) {
+        if let Err(err) = logical_op_check(Op::More, &words, &table) {
             assert!(false, "{}", err);
         }
     }
@@ -218,8 +227,8 @@ mod tests {
             schema: TableSchema {
                 name: "clients".to_string(),
                 cols: vec![
-                    ("id".to_string(), DataType::Int),
-                    ("name".to_string(), DataType::Str),
+                    Col {name: "id".to_string(), data_type: DataType::Int},
+                    Col {name: "name".to_string(), data_type: DataType::Str},
                 ],
             },
             rows: vec![],
@@ -258,8 +267,8 @@ mod tests {
                     schema: TableSchema {
                         name: "table1".to_string(),
                         cols: vec![
-                            ("id".to_string(), DataType::Int),
-                            ("name".to_string(), DataType::Str),
+                            Col {name: "id".to_string(), data_type: DataType::Int},
+                            Col {name: "name".to_string(), data_type: DataType::Str},
                         ],
                     },
                     rows: vec![
@@ -277,9 +286,9 @@ mod tests {
                     schema: TableSchema {
                         name: "table2".to_string(),
                         cols: vec![
-                            ("id".to_string(), DataType::Int),
-                            ("name".to_string(), DataType::Str),
-                            ("age".to_string(), DataType::Int),
+                            Col {name: "id".to_string(), data_type: DataType::Int},
+                            Col {name: "name".to_string(), data_type: DataType::Str},
+                            Col {name: "age".to_string(), data_type: DataType::Int},
                         ],
                     },
                     rows: vec![
