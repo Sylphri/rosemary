@@ -34,10 +34,10 @@ impl fmt::Display for Table {
         assert!(DataType::Count as u8 == 3, "Exhaustive DataType handling in Table::fmt()");
         for Col {name, data_type} in &self.schema.cols {
             match data_type {
-                DataType::Int => print!("{name:>5}"),
-                DataType::Str => print!("{name:>20}"),
+                DataType::Int  => print!("{name:>5}"),
+                DataType::Str  => print!("{name:>20}"),
                 DataType::Type => print!("{name:>5}"),
-                _ => unreachable!(),
+                _              => unreachable!(),
             }
         
          }
@@ -47,7 +47,7 @@ impl fmt::Display for Table {
                 match word {
                     WordType::Int(value) => print!("{value:>5}"),
                     WordType::Str(value) => print!("{value:>20}"),
-                    _ => unreachable!(),
+                    _                    => unreachable!(),
                 }
             }
             println!();
@@ -59,6 +59,7 @@ impl fmt::Display for Table {
 #[derive(Debug, PartialEq)]
 struct Database {
     name: String,
+    path: String,
     tables: Vec<Table>,
 }
 
@@ -79,7 +80,7 @@ enum Op {
     Less,
     More,
     Create,
-    DropOp,
+    Drop,
     Count,
 }
 
@@ -185,7 +186,7 @@ fn try_parse_op(op: &str) -> Option<Op> {
         "filter-and" => Some(Op::FilterAnd),
         "filter-or"  => Some(Op::FilterOr),
         "create"     => Some(Op::Create),
-        "drop"       => Some(Op::DropOp),
+        "drop"       => Some(Op::Drop),
         "=="         => Some(Op::Equal),
         "!="         => Some(Op::NotEqual),
         ">"          => Some(Op::More),
@@ -277,25 +278,25 @@ fn logical_op_check(op: Op, col: WordType, value: (DataType, WordType), table: &
         other => return Err(format!("ERROR: invalid argument for `{}` operation, expected string but found {:?}", op_sym, other)),
     };
 
-    let mut idx = -1;
+    let mut idx = table.schema.cols.len();
     for (i, Col {name, ..}) in table.schema.cols.iter().enumerate() {
         if *name == col {
-            idx = i as i32;
+            idx = i;
             break;
         }
     }
 
-    if idx < 0 {
+    if idx == table.schema.cols.len() {
         return Err(format!("ERROR: no such column `{0}` in table `{1}`", col, table.schema.name));
     }
 
-    let col_data_type = table.schema.cols[idx as usize].data_type;
+    let col_data_type = table.schema.cols[idx].data_type;
     if value.0 != col_data_type {
         return Err(format!("ERROR: invalid argument for `{}` operation expected type {:?} but found type {:?}", op_sym, col_data_type, value.1));
     }
     
     Ok(Condition {
-        idx: idx as usize,
+        idx: idx,
         value: value.1,
         op: op,
     })
@@ -312,432 +313,406 @@ fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: Op) -> bool {
     }
 }
 
+fn table_name_check(name: WordType, database: &Database) -> Result<usize, String> {
+    let table_name = match name {
+        WordType::Str(name) => name.clone(),
+        other => return Err(format!("ERROR: table name expected to be string but found '{:?}'", other)),
+    };
+
+    let mut table_idx = database.tables.len();
+    for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
+        if table_name == schema.name {
+            table_idx = i;
+            break;
+        }
+    }
+
+    if table_idx == database.tables.len() {
+        return Err(format!("ERROR: not such table '{}' in '{}' database", table_name, database.name));
+    }
+   
+    Ok(table_idx)
+}
+
 fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
     let mut words: Vec<(DataType, WordType)> = vec![];
     let mut conditions: Vec<(WordType, (DataType, WordType), Op)> = vec![];
     let mut temp_table = None;    
     for op in query {
         match op {
-                Op::Select => {
-                    if words.len() == 0 {
-                        eprintln!("ERROR: no arguments provided for `select` operation");
+            Op::Select => {
+                if words.len() == 0 {
+                    eprintln!("ERROR: no arguments provided for `select` operation");
+                    return None;
+                }
+                let mut row_idxs = vec![];
+                let mut words_iter = words.iter();
+                let table_idx = match table_name_check(words[0].1.clone(), &database) {
+                    Ok(idx) => idx,
+                    Err(err) => {
+                        eprintln!("{}", err);
                         return None;
-                    }
-                    let mut row_idxs = vec![];
-                    let mut words_iter = words.iter();
-                    let table_name = match words_iter.next() {
-                        Some((_, name)) => match name {
-                            WordType::Str(name) => name.clone(),
-                            other => {
-                                eprintln!("ERROR: table name expected to be string but found '{:?}'", other);
-                                return None;
-                            },
+                    },
+                };
+                
+                words_iter.next();
+                'outer: for (_, word) in words_iter {
+                    match word {
+                        WordType::Str(value) => {
+                            if value == "*" {
+                                row_idxs.append(&mut (0..database.tables[table_idx].schema.cols.len()).collect::<Vec<usize>>());
+                                continue;
+                            }
+
+                            for (i, Col {name, ..}) in database.tables[table_idx].schema.cols.iter().enumerate() {
+                                if name == value {
+                                    row_idxs.push(i);
+                                    continue 'outer;
+                                }
+                            }
+                            eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[table_idx].schema.name);
+                            return None;
                         },
-                        None => {
-                            eprintln!("ERROR: table name not provided for `select` operation");
+                        _ => {
+                            eprintln!("ERROR: `select` operation can operate only strings");
                             return None;
                         }
-                    };
-
-                    let mut table_idx = -1;
-                    for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
-                        if table_name == schema.name {
-                            table_idx = i as i32;
-                            break;
-                        }
                     }
+                }
 
-                    if table_idx < 0 {
-                        eprintln!("ERROR: not such table '{}' in '{}' database", table_name, database.name);
-                        return None;
-                    }
-                    
-                    'outer: for (_, word) in words_iter {
-                        match word {
-                            WordType::Str(value) => {
-                                if value == "*" {
-                                    row_idxs.append(&mut (0..database.tables[table_idx as usize].schema.cols.len()).collect::<Vec<usize>>());
-                                    continue;
-                                }
+                let mut schema = TableSchema {
+                    name: String::from("temp"),
+                    cols: vec![],
+                };
+                
+                for idx in &row_idxs {
+                    schema.cols.push(database.tables[table_idx].schema.cols[*idx].clone());
+                }
 
-                                for (i, Col {name, ..}) in database.tables[table_idx as usize].schema.cols.iter().enumerate() {
-                                    if name == value {
-                                        row_idxs.push(i);
-                                        continue 'outer;
-                                    }
-                                }
-                                eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[table_idx as usize].schema.name);
-                                return None;
-                            },
-                            _ => {
-                                eprintln!("ERROR: `select` operation can operate only strings");
-                                return None;
-                            }
-                        }
-                    }
+                temp_table = Some(Table {
+                    schema,
+                    rows: vec![],
+                });
 
-                    let mut schema = TableSchema {
-                        name: String::from("temp"),
-                        cols: vec![],
-                    };
-                    
+                let temp_table = match temp_table {
+                    Some(ref mut table) => table,
+                    None => unreachable!(),
+                };
+                for row in &database.tables[table_idx].rows {
+                    let mut temp_row = vec![];
                     for idx in &row_idxs {
-                        schema.cols.push(database.tables[table_idx as usize].schema.cols[*idx].clone());
+                        temp_row.push(row[*idx].clone());
                     }
+                    temp_table.rows.push(temp_row);
+                }
+                words.clear();
+            },
+            Op::Insert => {
+                if words.len() < 1 {
+                    eprintln!("ERROR: table name not provided for `insert` operation");
+                    return None;
+                }
+                
+                let table_idx = match table_name_check(words[0].1.clone(), &database) {
+                    Ok(idx) => idx,
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        return None;
+                    },
+                };
+                
+                let words_slice = &words[1..];
+                let col_count = database.tables[table_idx].schema.cols.len(); 
+                if words_slice.len() < col_count {
+                    eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words_slice.len(), col_count);
+                    return None;
+                }
 
-                    temp_table = Some(Table {
-                        schema,
-                        rows: vec![],
-                    });
-
-                    let temp_table = match temp_table {
-                        Some(ref mut table) => table,
-                        None => unreachable!(),
-                    };
-                    for row in &database.tables[table_idx as usize].rows {
-                        let mut temp_row = vec![];
-                        for idx in &row_idxs {
-                            temp_row.push(row[*idx as usize].clone());
-                        }
-                        temp_table.rows.push(temp_row);
-                    }
-                    words.clear();
-                },
-                Op::Insert => {
-                    if words.len() < 1 {
-                        eprintln!("ERROR: table name not provided for `insert` operation");
+                for (i, word) in words_slice[words_slice.len() - col_count..words_slice.len()].iter().enumerate() {
+                    let col_data_type = database.tables[table_idx].schema.cols[i].data_type;
+                    if word.0 != col_data_type {
+                        eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, col_data_type);
                         return None;
                     }
-                    
-                    let table_name = match &words[0].1 {
-                        WordType::Str(name) => name.clone(),
-                        other => {
-                            eprintln!("ERROR: table name expected to be string but found '{:?}'", other);
+                }
+
+                database.tables[table_idx].rows.push(
+                    words_slice[words_slice.len() - col_count..words_slice.len()]
+                    .iter()
+                    .map(|x| x.1.clone())
+                    .collect::<Vec<WordType>>());
+                words.clear();
+            },
+            Op::Delete => {
+                if words.len() < 1 {
+                    eprintln!("ERROR: table name not provided for `delete` operation");
+                    return None;
+                }
+                
+                let table_idx = match table_name_check(words[0].1.clone(), &database) {
+                    Ok(idx) => idx,
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        return None;
+                    },
+                };
+                
+                let mut rows_to_delete = vec![];
+                let mut comp_conds = vec![]; 
+                for condition in &conditions {
+                    match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &database.tables[table_idx]) {
+                        Ok(condition) => comp_conds.push(condition),
+                        Err(err) => {
+                            eprintln!("{}", err);
                             return None;
-                        }
-                    };
-                    
-                    let mut table_idx = -1;
-                    for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
-                        if table_name == schema.name {
-                            table_idx = i as i32;
-                            break;
-                        }
+                        },
                     }
-
-                    if table_idx < 0 {
-                        eprintln!("ERROR: not such table '{}' in '{}' database", table_name, database.name);
-                        return None;
-                    }
-                    
-                    let words_slice = &words[1..];
-                    let col_count = database.tables[table_idx as usize].schema.cols.len(); 
-                    if words_slice.len() < col_count {
-                        eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words_slice.len(), col_count);
-                        return None;
-                    }
-
-                    for (i, word) in words_slice[words_slice.len() - col_count..words_slice.len()].iter().enumerate() {
-                        let col_data_type = database.tables[table_idx as usize].schema.cols[i].data_type;
-                        if word.0 != col_data_type {
-                            eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, col_data_type);
-                            return None;
-                        }
-                    }
-
-                    database.tables[table_idx as usize].rows.push(
-                        words_slice[words_slice.len() - col_count..words_slice.len()]
-                        .iter()
-                        .map(|x| x.1.clone())
-                        .collect::<Vec<WordType>>());
-                    words.clear();
-                },
-                Op::Delete => {
-                    if words.len() < 1 {
-                        eprintln!("ERROR: table name not provided for `delete` operation");
-                        return None;
-                    }
-                    
-                    let table_name = match &words[0].1 {
-                        WordType::Str(name) => name.clone(),
-                        other => {
-                            eprintln!("ERROR: table name expected to be string but found '{:?}'", other);
-                            return None;
-                        }
-                    };
-                    words.pop();
-                    
-                    let mut table_idx = -1;
-                    for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
-                        if table_name == schema.name {
-                            table_idx = i as i32;
-                            break;
-                        }
-                    }
-
-                    if table_idx < 0 {
-                        eprintln!("ERROR: not such table '{}' in '{}' database", table_name, database.name);
-                        return None;
-                    }
-                    
-                    let mut rows_to_delete = vec![];
-                    let mut comp_conds = vec![]; 
-                    for condition in &conditions {
-                        match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &database.tables[table_idx as usize]) {
-                            Ok(condition) => comp_conds.push(condition),
-                            Err(err) => {
-                                eprintln!("{}", err);
-                                return None;
+                }
+                
+                for (i, row) in database.tables[table_idx].rows.iter().enumerate() {
+                    let mut filtered_cols = 0;
+                    for condition in &comp_conds {
+                        match &row[condition.idx] {
+                            WordType::Int(value) => {
+                                if let WordType::Int(cond_value) = &condition.value {
+                                    if !filter_condition(value, cond_value, condition.op.clone()) {
+                                        filtered_cols += 1;
+                                    }
+                                } else {
+                                    unreachable!();
+                                }
                             },
+                            WordType::Str(value) => {
+                                if let WordType::Str(cond_value) = &condition.value {
+                                    if !filter_condition(value, cond_value, condition.op.clone()) {
+                                        filtered_cols += 1;
+                                    }
+                                } else {
+                                    unreachable!();
+                                }
+                            },
+                            WordType::Type(_) => todo!(),
                         }
                     }
-                    
-                    for (i, row) in database.tables[table_idx as usize].rows.iter().enumerate() {
-                        let mut filtered_cols = 0;
-                        for condition in &comp_conds {
-                            match &row[condition.idx] {
-                                WordType::Int(value) => {
-                                    if let WordType::Int(cond_value) = &condition.value {
-                                        if !filter_condition(value, cond_value, condition.op.clone()) {
-                                            filtered_cols += 1;
-                                        }
-                                    } else {
-                                        unreachable!();
-                                    }
-                                },
-                                WordType::Str(value) => {
-                                    if let WordType::Str(cond_value) = &condition.value {
-                                        if !filter_condition(value, cond_value, condition.op.clone()) {
-                                            filtered_cols += 1;
-                                        }
-                                    } else {
-                                        unreachable!();
-                                    }
-                                },
-                                WordType::Type(_) => todo!(),
-                            }
+                    if filtered_cols == conditions.len() {
+                        rows_to_delete.push(i);
+                    }
+                }
+
+                let mut deleted = 0;
+                for row in rows_to_delete {
+                    database.tables[0].rows.remove(row - deleted);
+                    deleted += 1;
+                }       
+                conditions.clear();
+            },
+            Op::FilterAnd => {
+                let mut temp_table = match temp_table {
+                    Some(ref mut table) => table,
+                    None => { 
+                        eprintln!("ERROR: `filter-and` operation must be used with `select` operation");
+                        return None;
+                    },
+                };
+                
+                let mut comp_conds = vec![]; 
+                for condition in &conditions {
+                    match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &temp_table) {
+                        Ok(condition) => comp_conds.push(condition),
+                        Err(err) => {
+                            eprintln!("{}", err);
+                            return None;
+                        },
+                    }
+                }
+                let mut filtered_rows = vec![];
+                for row in &temp_table.rows {
+                    let mut filtered = false;
+                    for condition in &comp_conds {
+                        match &row[condition.idx] {
+                            WordType::Int(value) => {
+                                if let WordType::Int(cond_value) = &condition.value {
+                                    filtered = filter_condition(value, cond_value, condition.op.clone());
+                                } else {
+                                    unreachable!();
+                                }
+                            },
+                            WordType::Str(value) => {
+                                if let WordType::Str(cond_value) = &condition.value {
+                                    filtered = filter_condition(value, cond_value, condition.op.clone());
+                                } else {
+                                    unreachable!();
+                                }
+                            },
+                            WordType::Type(_) => todo!(),
                         }
-                        if filtered_cols == conditions.len() {
-                            rows_to_delete.push(i);
+                        if filtered { break; }
+                    }
+
+                    if !filtered {
+                        filtered_rows.push(row.clone());
+                    }
+                }
+
+                temp_table.rows = filtered_rows; 
+                conditions.clear();
+            },
+            Op::FilterOr => {
+                let mut temp_table = match temp_table {
+                    Some(ref mut table) => table,
+                    None => {
+                        eprintln!("ERROR: `filter-or` operation must be used with `select` operation");
+                        return None;
+                    },
+                };
+                
+                let mut comp_conds = vec![]; 
+                for condition in &conditions {
+                    match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &temp_table) {
+                        Ok(condition) => comp_conds.push(condition),
+                        Err(err) => {
+                            eprintln!("{}", err);
+                            return None;
+                        },
+                    }
+                }
+                let mut filtered_rows = vec![];
+                for row in &temp_table.rows {
+                    let mut filtered_count = 0;
+                    for condition in &comp_conds {
+                        match &row[condition.idx] {
+                            WordType::Int(value) => {
+                                if let WordType::Int(cond_value) = &condition.value {
+                                    if filter_condition(value, cond_value, condition.op.clone()) { filtered_count += 1; }
+                                } else {
+                                    unreachable!();
+                                }
+                            },
+                            WordType::Str(value) => {
+                                if let WordType::Str(cond_value) = &condition.value {
+                                    if filter_condition(value, cond_value, condition.op.clone()) { filtered_count += 1; }
+                                } else {
+                                    unreachable!();
+                                }
+                            },
+                            WordType::Type(_) => todo!(),
                         }
                     }
 
-                    let mut deleted = 0;
-                    for row in rows_to_delete {
-                        database.tables[0].rows.remove(row - deleted);
-                        deleted += 1;
-                    }       
-                    conditions.clear();
-                },
-                Op::FilterAnd => {
-                    let mut temp_table = match temp_table {
-                        Some(ref mut table) => table,
-                        None => { 
-                            eprintln!("ERROR: `filter-and` operation must be used with `select` operation");
+                    if filtered_count < conditions.len() {
+                        filtered_rows.push(row.clone());
+                    }
+                }
+
+                temp_table.rows = filtered_rows; 
+                conditions.clear();
+            },
+            op @ Op::Equal | op @ Op::NotEqual | op @ Op::Less | op @ Op::More => {
+                assert!(Op::Count.as_u8() == 12, "Exhaustive Op handling in logical_op_check()");
+                let op_sym = match op {
+                    Op::Equal    => "==",
+                    Op::NotEqual => "!=",
+                    Op::Less     => "<",
+                    Op::More     => ">",
+                    _            => unreachable!(),
+                };
+
+                if words.len() < 2 {
+                    eprintln!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
+                    return None;
+                }
+
+                conditions.push((words[words.len() - 2].1.clone(), words[words.len() - 1].clone(), op.clone()));
+                words.pop();
+                words.pop();
+            },
+            Op::Create => {
+                if words.len() == 0 {
+                    eprintln!("ERROR: no arguments provided for `create` operation");
+                    return None;
+                }
+
+                let table_name = match &words[0].1 {
+                    WordType::Str(name) => name.clone(),
+                    other => {
+                        eprintln!("ERROR: name of the table expected to be a string but found `{:?}`", other);
+                        return None;
+                    },
+                };
+
+                let mut words_iter = words.iter();
+                words_iter.next();
+                let mut cols = vec![];
+                while let Some(word) = words_iter.next() {
+                    let col_name = match &word.1 {
+                        WordType::Str(name) => name.clone(),
+                        other => {
+                            eprintln!("ERROR: name of the column expected to be a string but found `{:?}`", other);
                             return None;
                         },
                     };
-                    
-                    let mut comp_conds = vec![]; 
-                    for condition in &conditions {
-                        match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &temp_table) {
-                            Ok(condition) => comp_conds.push(condition),
-                            Err(err) => {
-                                eprintln!("{}", err);
-                                return None;
-                            },
-                        }
-                    }
-                    let mut filtered_rows = vec![];
-                    for row in &temp_table.rows {
-                        let mut filtered = false;
-                        for condition in &comp_conds {
-                            match &row[condition.idx] {
-                                WordType::Int(value) => {
-                                    if let WordType::Int(cond_value) = &condition.value {
-                                        filtered = filter_condition(value, cond_value, condition.op.clone());
-                                    } else {
-                                        unreachable!();
-                                    }
-                                },
-                                WordType::Str(value) => {
-                                    if let WordType::Str(cond_value) = &condition.value {
-                                        filtered = filter_condition(value, cond_value, condition.op.clone());
-                                    } else {
-                                        unreachable!();
-                                    }
-                                },
-                                WordType::Type(_) => todo!(),
-                            }
-                            if filtered { break; }
-                        }
 
-                        if !filtered {
-                            filtered_rows.push(row.clone());
-                        }
-                    }
-
-                    temp_table.rows = filtered_rows; 
-                    conditions.clear();
-                },
-                Op::FilterOr => {
-                    let mut temp_table = match temp_table {
-                        Some(ref mut table) => table,
+                    let col_type = match words_iter.next() {
+                        Some(data_type) => data_type,
                         None => {
-                            eprintln!("ERROR: `filter-or` operation must be used with `select` operation");
+                            eprintln!("ERROR: column type is not provided");
                             return None;
                         },
                     };
-                    
-                    let mut comp_conds = vec![]; 
-                    for condition in &conditions {
-                        match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &temp_table) {
-                            Ok(condition) => comp_conds.push(condition),
-                            Err(err) => {
-                                eprintln!("{}", err);
-                                return None;
-                            },
-                        }
-                    }
-                    let mut filtered_rows = vec![];
-                    for row in &temp_table.rows {
-                        let mut filtered_count = 0;
-                        for condition in &comp_conds {
-                            match &row[condition.idx] {
-                                WordType::Int(value) => {
-                                    if let WordType::Int(cond_value) = &condition.value {
-                                        if filter_condition(value, cond_value, condition.op.clone()) { filtered_count += 1; }
-                                    } else {
-                                        unreachable!();
-                                    }
-                                },
-                                WordType::Str(value) => {
-                                    if let WordType::Str(cond_value) = &condition.value {
-                                        if filter_condition(value, cond_value, condition.op.clone()) { filtered_count += 1; }
-                                    } else {
-                                        unreachable!();
-                                    }
-                                },
-                                WordType::Type(_) => todo!(),
-                            }
-                        }
 
-                        if filtered_count < conditions.len() {
-                            filtered_rows.push(row.clone());
-                        }
-                    }
-
-                    temp_table.rows = filtered_rows; 
-                    conditions.clear();
-                },
-                op @ Op::Equal | op @ Op::NotEqual | op @ Op::Less | op @ Op::More => {
-                    assert!(Op::Count.as_u8() == 12, "Exhaustive Op handling in logical_op_check()");
-                    let op_sym = match op {
-                        Op::Equal    => "==",
-                        Op::NotEqual => "!=",
-                        Op::Less     => "<",
-                        Op::More     => ">",
-                        _            => unreachable!(),
-                    };
-
-                    if words.len() < 2 {
-                        eprintln!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
-                        return None;
-                    }
-
-                    conditions.push((words[words.len() - 2].1.clone(), words[words.len() - 1].clone(), op.clone()));
-                    words.pop();
-                    words.pop();
-                },
-                Op::Create => {
-                    if words.len() == 0 {
-                        eprintln!("ERROR: no arguments provided for `create` operation");
-                        return None;
-                    }
-
-                    let table_name = match &words[0].1 {
-                        WordType::Str(name) => name.clone(),
+                    let col_type = match &col_type.1 {
+                        WordType::Type(data_type) => data_type,
                         other => {
-                            eprintln!("ERROR: name of the table expected to be a string but found `{:?}`", other);
+                            eprintln!("ERROR: unknown column type '{:?}' in `create` operation", other);
                             return None;
                         },
                     };
 
-                    let mut words_iter = words.iter();
-                    words_iter.next();
-                    let mut cols = vec![];
-                    while let Some(word) = words_iter.next() {
-                        let col_name = match &word.1 {
-                            WordType::Str(name) => name.clone(),
-                            other => {
-                                eprintln!("ERROR: name of the column expected to be a string but found `{:?}`", other);
-                                return None;
-                            },
-                        };
+                    cols.push(Col {name: col_name, data_type: col_type.clone()});
+                }
 
-                        let col_type = match words_iter.next() {
-                            Some(data_type) => data_type,
-                            None => {
-                                eprintln!("ERROR: column type is not provided");
-                                return None;
-                            },
-                        };
+                database.tables.push(Table {
+                    schema: TableSchema {
+                        name: table_name,
+                        cols: cols,
+                    },
+                    rows: vec![],
+                });
+                words.clear();
+            },
+            Op::Drop => {
+                if words.len() < 1 {
+                    eprintln!("ERROR: no arguments provided for `drop` operation");
+                    return None;
+                }
 
-                        let col_type = match &col_type.1 {
-                            WordType::Type(data_type) => data_type,
-                            other => {
-                                eprintln!("ERROR: unknown column type '{:?}' in `create` operation", other);
-                                return None;
-                            },
-                        };
-
-                        cols.push(Col {name: col_name, data_type: col_type.clone()});
-                    }
-
-                    database.tables.push(Table {
-                        schema: TableSchema {
-                            name: table_name,
-                            cols: cols,
-                        },
-                        rows: vec![],
-                    });
-                    words.clear();
-                },
-                // Drop operation dont delete files
-                Op::DropOp => {
-                    if words.len() < 1 {
-                        eprintln!("ERROR: no arguments provided for `drop` operation");
+                let table_idx = match table_name_check(words[0].1.clone(), &database) {
+                    Ok(idx) => idx,
+                    Err(err) => {
+                        eprintln!("{}", err);
                         return None;
-                    }
+                    },
+                };
+                let table_name = database.tables[table_idx].schema.name.clone();
 
-                    let table_name = match &words[words.len() - 1].1 {
-                        WordType::Str(name) => name.clone(),
-                        other => {
-                            eprintln!("ERROR: name of the table expected to be a string but found `{:?}`", other);
-                            return None;
-                        },
-                    };
+                database.tables.remove(table_idx);
+                words.pop();
 
-                    let mut table_idx = -1; 
-                    for (i, table) in database.tables.iter().enumerate() {
-                        if table.schema.name == table_name {
-                            table_idx = i as i32;
-                            break;
-                        }
-                    }
-
-                    if table_idx < 0 {
-                        eprintln!("ERROR: no such table '{}' in database '{}'", table_name, database.name);
-                        return None;
-                    }
-
-                    database.tables.remove(table_idx as usize);
-                    words.pop();
-                },
-                Op::PushWord{data_type, word_type} => {
-                    words.push((data_type.clone(), word_type.clone())); 
-                },
-                Op::Count => unreachable!(),
+                let table_file = format!("{}/{}.tbl", database.path, table_name);  
+                if let Err(err) = fs::remove_file(table_file.clone()) {
+                    eprintln!("ERROR: can't delete database file {}: {}", table_file, err);
+                    return None;
+                };
+                let schema_file = format!("{}/{}.tbls", database.path, table_name);  
+                if let Err(err) = fs::remove_file(schema_file.clone()) {
+                    eprintln!("ERROR: can't delete database file {}: {}", schema_file, err);
+                    return None;
+                };
+            },
+            Op::PushWord{data_type, word_type} => {
+                words.push((data_type.clone(), word_type.clone())); 
+            },
+            Op::Count => unreachable!(),
         }
     }
 
@@ -784,7 +759,7 @@ fn read_from_file(dir: &str, schema: TableSchema) -> Table {
         exit(1);
     }
 
-    let mut i32_buf: [u8; 4] = [0; 4];
+    let mut i32_buf: [u8; 4]  = [0; 4];
     let mut str_buf: [u8; 50] = [0; 50];
     for _ in 0..file_len / row_len {
         let mut row: Row = vec![];
@@ -807,7 +782,8 @@ fn read_from_file(dir: &str, schema: TableSchema) -> Table {
                     let str_len = str_buf.iter().position(|&x| x == 0).unwrap_or(50);
                     row.push(WordType::Str(String::from_utf8_lossy(&str_buf[0..str_len]).to_string()));
                 },
-                _ => unreachable!(),
+                DataType::Type => todo!(),
+                DataType::Count => unreachable!(),
             }
         }
         table.rows.push(row);
@@ -845,7 +821,7 @@ fn save_to_file(dir: &str, table: &Table) -> Result<(), String> {
                         Ok(_) => (),
                     };     
                 },
-                _ => unreachable!(),
+                WordType::Type(_) => todo!(),
             }
         } 
     }
@@ -861,6 +837,7 @@ fn load_database_from(path: &str) -> Result<Database, String> {
     
     let mut database = Database {
         name: "database".to_string(),
+        path: path.to_string(),
         tables: vec![],
     };
     

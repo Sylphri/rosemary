@@ -201,6 +201,7 @@ mod tests {
         let query = "clients (id Int) (name Str) create";
         let mut database = Database {
             name: "database".to_string(),
+            path: String::new(),
             tables: vec![],
         }; 
         let tokens = parse_query(query).unwrap();
@@ -225,6 +226,7 @@ mod tests {
         let query = "clients drop";
         let mut database = Database {
             name: "database".to_string(),
+            path: String::new(),
             tables: vec![
                 Table {
                     schema: TableSchema {
@@ -246,6 +248,7 @@ mod tests {
     fn load_database() {
         let expected = Database {
             name: "database".to_string(),
+            path: String::new(),
             tables: vec![
                 Table {
                     schema: TableSchema {
