@@ -1,0 +1,4 @@
+table2
+id:Int
+name:Str
+age:Int
