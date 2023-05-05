@@ -136,23 +136,7 @@ mod tests {
             value: WordType::Str("John".to_string()),
             op: Op::Equal,
         };
-        assert!(expected == logical_op_check(Op::Equal, &words, &table).unwrap());
-    }
-
-    #[test]
-    #[should_panic(expected = "ERROR: not enough arguments for `==` operation, provided 1 but needed 2")]
-    fn one_argument_for_logic_op() {
-        let words = vec![(DataType::Str, WordType::Str("name".to_string()))];
-        let table = Table {
-            schema: TableSchema {
-                name: "test".to_string(),
-                cols: vec![],
-            },
-            rows: vec![],
-        };
-        if let Err(err) = logical_op_check(Op::Equal, &words, &table) {
-            assert!(false, "{}", err);
-        }
+        assert!(expected == logical_op_check(Op::Equal, words[0].1.clone(), words[1].clone(), &table).unwrap());
     }
 
     #[test]
@@ -169,7 +153,7 @@ mod tests {
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(Op::More, &words, &table) {
+        if let Err(err) = logical_op_check(Op::More, words[0].1.clone(), words[1].clone(), &table) {
             assert!(false, "{}", err);
         }
     }
@@ -188,7 +172,7 @@ mod tests {
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(Op::More, &words, &table) {
+        if let Err(err) = logical_op_check(Op::More, words[0].1.clone(), words[1].clone(), &table) {
             assert!(false, "{}", err);
         }
     }
@@ -207,7 +191,7 @@ mod tests {
             },
             rows: vec![],
         };
-        if let Err(err) = logical_op_check(Op::More, &words, &table) {
+        if let Err(err) = logical_op_check(Op::More, words[0].1.clone(), words[1].clone(), &table) {
             assert!(false, "{}", err);
         }
     }

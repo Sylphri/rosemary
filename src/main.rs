@@ -263,27 +263,22 @@ struct Condition {
 }
 
 // TODO: Maybe change table with schema
-fn logical_op_check(op: Op, words: &[(DataType, WordType)], temp_table: &Table) -> Result<Condition, String> {
-    assert!(Op::Count.as_u8()  == 12, "Exhaustive Op handling in logical_op_check()");
+fn logical_op_check(op: Op, col: WordType, value: (DataType, WordType), table: &Table) -> Result<Condition, String> {
     let op_sym = match op {
-        Op::Equal => "==",
+        Op::Equal    => "==",
         Op::NotEqual => "!=",
-        Op::Less => "<",
-        Op::More => ">",
-        _ => unreachable!(),
+        Op::Less     => "<",
+        Op::More     => ">",
+        _            => unreachable!(),
     };
-
-    if words.len() < 2 {
-        return Err(format!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len()));
-    }
     
-    let col = match &words[words.len() - 2].1 {
+    let col = match col {
         WordType::Str(value) => value.clone(),
         other => return Err(format!("ERROR: invalid argument for `{}` operation, expected string but found {:?}", op_sym, other)),
     };
 
     let mut idx = -1;
-    for (i, Col {name, ..}) in temp_table.schema.cols.iter().enumerate() {
+    for (i, Col {name, ..}) in table.schema.cols.iter().enumerate() {
         if *name == col {
             idx = i as i32;
             break;
@@ -291,23 +286,23 @@ fn logical_op_check(op: Op, words: &[(DataType, WordType)], temp_table: &Table) 
     }
 
     if idx < 0 {
-        return Err(format!("ERROR: no such column `{0}` in table `{1}`", col, temp_table.schema.name));
+        return Err(format!("ERROR: no such column `{0}` in table `{1}`", col, table.schema.name));
     }
 
-    let value = &words[words.len() - 1];
-    let col_data_type = temp_table.schema.cols[idx as usize].data_type;
+    let col_data_type = table.schema.cols[idx as usize].data_type;
     if value.0 != col_data_type {
         return Err(format!("ERROR: invalid argument for `{}` operation expected type {:?} but found type {:?}", op_sym, col_data_type, value.1));
     }
     
     Ok(Condition {
         idx: idx as usize,
-        value: value.1.clone(),
+        value: value.1,
         op: op,
     })
 }
 
 fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: Op) -> bool {
+    assert!(Op::Count.as_u8() == 12, "Exhaustive logic Ops handling in filter_condition()");
     match condition {
         Op::Equal    => *a != *b,
         Op::NotEqual => *a == *b,
@@ -319,9 +314,9 @@ fn filter_condition<T: PartialOrd>(a: &T, b: &T, condition: Op) -> bool {
 
 fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
     let mut words: Vec<(DataType, WordType)> = vec![];
-    let mut conditions: Vec<Condition> = vec![];
+    let mut conditions: Vec<(WordType, (DataType, WordType), Op)> = vec![];
     let mut temp_table = None;    
-    for (op_id, op) in query.iter().enumerate() {
+    for op in query {
         match op {
                 Op::Select => {
                     if words.len() == 0 {
@@ -455,15 +450,51 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         .iter()
                         .map(|x| x.1.clone())
                         .collect::<Vec<WordType>>());
-                    // TODO: delete only used words
                     words.clear();
                 },
                 Op::Delete => {
+                    if words.len() < 1 {
+                        eprintln!("ERROR: table name not provided for `delete` operation");
+                        return None;
+                    }
+                    
+                    let table_name = match &words[0].1 {
+                        WordType::Str(name) => name.clone(),
+                        other => {
+                            eprintln!("ERROR: table name expected to be string but found '{:?}'", other);
+                            return None;
+                        }
+                    };
+                    words.pop();
+                    
+                    let mut table_idx = -1;
+                    for (i, Table {schema, ..}) in database.tables.iter().enumerate() {
+                        if table_name == schema.name {
+                            table_idx = i as i32;
+                            break;
+                        }
+                    }
+
+                    if table_idx < 0 {
+                        eprintln!("ERROR: not such table '{}' in '{}' database", table_name, database.name);
+                        return None;
+                    }
+                    
                     let mut rows_to_delete = vec![];
-                    for (i, row) in database.tables[0].rows.iter().enumerate() {
+                    let mut comp_conds = vec![]; 
+                    for condition in &conditions {
+                        match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &database.tables[table_idx as usize]) {
+                            Ok(condition) => comp_conds.push(condition),
+                            Err(err) => {
+                                eprintln!("{}", err);
+                                return None;
+                            },
+                        }
+                    }
+                    
+                    for (i, row) in database.tables[table_idx as usize].rows.iter().enumerate() {
                         let mut filtered_cols = 0;
-                        for condition in &conditions {
-                            assert!(Op::Count.as_u8() == 9, "Exhaustive logic Ops handling");
+                        for condition in &comp_conds {
                             match &row[condition.idx] {
                                 WordType::Int(value) => {
                                     if let WordType::Int(cond_value) = &condition.value {
@@ -483,7 +514,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                                         unreachable!();
                                     }
                                 },
-                                _ => unreachable!(),
+                                WordType::Type(_) => todo!(),
                             }
                         }
                         if filtered_cols == conditions.len() {
@@ -500,14 +531,27 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                 },
                 Op::FilterAnd => {
                     let mut temp_table = match temp_table {
-                        Some(ref mut  table) => table,
-                        None => todo!(),
+                        Some(ref mut table) => table,
+                        None => { 
+                            eprintln!("ERROR: `filter-and` operation must be used with `select` operation");
+                            return None;
+                        },
                     };
+                    
+                    let mut comp_conds = vec![]; 
+                    for condition in &conditions {
+                        match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &temp_table) {
+                            Ok(condition) => comp_conds.push(condition),
+                            Err(err) => {
+                                eprintln!("{}", err);
+                                return None;
+                            },
+                        }
+                    }
                     let mut filtered_rows = vec![];
                     for row in &temp_table.rows {
                         let mut filtered = false;
-                        for condition in &conditions {
-                            assert!(Op::Count.as_u8() == 9, "Exhaustive logic Ops handling");
+                        for condition in &comp_conds {
                             match &row[condition.idx] {
                                 WordType::Int(value) => {
                                     if let WordType::Int(cond_value) = &condition.value {
@@ -523,7 +567,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                                         unreachable!();
                                     }
                                 },
-                                _ => unreachable!(),
+                                WordType::Type(_) => todo!(),
                             }
                             if filtered { break; }
                         }
@@ -539,13 +583,26 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                 Op::FilterOr => {
                     let mut temp_table = match temp_table {
                         Some(ref mut table) => table,
-                        None => todo!(),
+                        None => {
+                            eprintln!("ERROR: `filter-or` operation must be used with `select` operation");
+                            return None;
+                        },
                     };
+                    
+                    let mut comp_conds = vec![]; 
+                    for condition in &conditions {
+                        match logical_op_check(condition.2.clone(), condition.0.clone(), condition.1.clone(), &temp_table) {
+                            Ok(condition) => comp_conds.push(condition),
+                            Err(err) => {
+                                eprintln!("{}", err);
+                                return None;
+                            },
+                        }
+                    }
                     let mut filtered_rows = vec![];
                     for row in &temp_table.rows {
                         let mut filtered_count = 0;
-                        for condition in &conditions {
-                            assert!(Op::Count.as_u8() == 9, "Exhaustive logic Ops handling");
+                        for condition in &comp_conds {
                             match &row[condition.idx] {
                                 WordType::Int(value) => {
                                     if let WordType::Int(cond_value) = &condition.value {
@@ -561,7 +618,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                                         unreachable!();
                                     }
                                 },
-                                _ => unreachable!(),
+                                WordType::Type(_) => todo!(),
                             }
                         }
 
@@ -574,32 +631,23 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                     conditions.clear();
                 },
                 op @ Op::Equal | op @ Op::NotEqual | op @ Op::Less | op @ Op::More => {
-                    let mut curr_table = match temp_table {
-                        Some(ref table) => table,
-                        None => todo!(),
+                    assert!(Op::Count.as_u8() == 12, "Exhaustive Op handling in logical_op_check()");
+                    let op_sym = match op {
+                        Op::Equal    => "==",
+                        Op::NotEqual => "!=",
+                        Op::Less     => "<",
+                        Op::More     => ">",
+                        _            => unreachable!(),
                     };
-                    let mut query = query[op_id + 1..].iter();
-                    while let Some(op) = query.next() {
-                        match op {
-                            Op::Delete => {
-                                curr_table = &database.tables[0];
-                                break;
-                            }
-                            _ => (),
-                        }      
-                    } 
-                    
-                    match logical_op_check(op.clone(), &words, &curr_table) {
-                        Ok(condition) => {
-                            conditions.push(condition);
-                            words.pop();
-                            words.pop();
-                        },
-                        Err(err) => {
-                            eprintln!("{}", err);
-                            return None;
-                        }
-                    } 
+
+                    if words.len() < 2 {
+                        eprintln!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
+                        return None;
+                    }
+
+                    conditions.push((words[words.len() - 2].1.clone(), words[words.len() - 1].clone(), op.clone()));
+                    words.pop();
+                    words.pop();
                 },
                 Op::Create => {
                     if words.len() == 0 {
@@ -655,6 +703,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                     });
                     words.clear();
                 },
+                // Drop operation dont delete files
                 Op::DropOp => {
                     if words.len() < 1 {
                         eprintln!("ERROR: no arguments provided for `drop` operation");
@@ -683,6 +732,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                     }
 
                     database.tables.remove(table_idx as usize);
+                    words.pop();
                 },
                 Op::PushWord{data_type, word_type} => {
                     words.push((data_type.clone(), word_type.clone())); 
@@ -692,10 +742,10 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
     }
 
     if words.len() > 0 {
-        eprintln!("WARNING: {0} unused words in the stack", words.len());
+        eprintln!("WARNING: {0} unused words in the words stack", words.len());
     }
     if conditions.len() > 0 {
-        eprintln!("WARNING: {0} unused conditions in the stack", conditions.len());
+        eprintln!("WARNING: {0} unused conditions in the conditions stack", conditions.len());
     }
     
     temp_table
