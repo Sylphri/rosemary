@@ -77,7 +77,7 @@ mod tests {
     // --- parse_query() ---
     #[test]
     fn valid_query() {
-        let query = "id name select id 10 > filter-and";
+        let query = "id name select id 10 > filter";
         let expected = vec![
             Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
             Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("name"))},
@@ -85,7 +85,7 @@ mod tests {
             Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
             Op::PushWord {data_type: DataType::Int, word_type: WordType::Int(10)},
             Op::More,
-            Op::FilterAnd,
+            Op::Filter,
         ];
         match parse_query(query) {
             Ok(tokens) => assert!(expected == tokens),
