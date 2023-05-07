@@ -77,15 +77,14 @@ mod tests {
     // --- parse_query() ---
     #[test]
     fn valid_query() {
-        let query = "id name select id 10 > filter";
+        let query = "id 10 > id name select";
         let expected = vec![
-            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
-            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("name"))},
-            Op::Select,
             Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
             Op::PushWord {data_type: DataType::Int, word_type: WordType::Int(10)},
             Op::More,
-            Op::Filter,
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("id"))},
+            Op::PushWord {data_type: DataType::Str, word_type: WordType::Str(String::from("name"))},
+            Op::Select,
         ];
         match parse_query(query) {
             Ok(tokens) => assert!(expected == tokens),
@@ -299,7 +298,7 @@ mod tests {
             ],
         };
 
-        assert!(expected == execute_query("clients id name select name John == id 1 == and filter", &mut database).unwrap().unwrap());
+        assert!(expected == execute_query("name John == id 1 == and clients id name select", &mut database).unwrap().unwrap());
     }
 
     #[test]
