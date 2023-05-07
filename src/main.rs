@@ -39,7 +39,6 @@ impl fmt::Display for Table {
                 DataType::Type => print!("{name:>5}"),
                 _              => unreachable!(),
             }
-        
          }
         println!();
         for row in &self.rows {
@@ -340,7 +339,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
     let mut words: Vec<(DataType, WordType)> = vec![];
     // TODO: Come up with better solution for this
     let mut conditions: Vec<(Option<WordType>, Option<(DataType, WordType)>, Op)> = vec![];
-    let mut temp_table = None;    
+    let mut temp_table = None;
     for op in query {
         match op {
             Op::Select => {

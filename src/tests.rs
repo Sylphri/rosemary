@@ -243,9 +243,8 @@ mod tests {
         assert!(database.tables.len() == 0);
     }
 
-    // TODO: rewrite this test for correct databases comparsions
-    // #[test]
-    fn load_database() {
+    #[test]
+    fn save_and_load_database() {
         let expected = Database {
             name: "database".to_string(),
             path: String::new(),
@@ -293,9 +292,16 @@ mod tests {
                 },
             ]
         };
-        save_to_file("./src/tests_input/database/", &expected.tables[0]);
-        save_to_file("./src/tests_input/database/", &expected.tables[1]);
+        save_database_to("./src/tests_input/database", &expected).unwrap();
         let database = load_database_from("./src/tests_input/database").unwrap();
-        assert!(database == expected);
+        'outer: for table in &expected.tables {
+            for table1 in &database.tables {
+                if table.schema.name == table1.schema.name {
+                    assert!(table == table1);
+                    continue 'outer;
+                }
+            }
+            assert!(false);
+        }
     }
 }
