@@ -499,10 +499,11 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                     return Err("ERROR: table name not provided for `delete` operation".to_string());
                 }
                 
-                let table_idx = match table_name_check(words[0].1.clone(), &database) {
+                let table_idx = match table_name_check(words[words.len() - 1].1.clone(), &database) {
                     Ok(idx) => idx,
                     Err(err) => return Err(err),
                 };
+                words.pop();
                 
                 let mut rows_to_delete = vec![];
                 let mut comp_conds = vec![]; 
@@ -559,7 +560,7 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
 
                 let mut deleted = 0;
                 for row in rows_to_delete {
-                    database.tables[0].rows.remove(row - deleted);
+                    database.tables[table_idx].rows.remove(row - deleted);
                     deleted += 1;
                 }       
                 conditions.clear();
@@ -734,7 +735,7 @@ fn read_from_file(dir: &str, schema: TableSchema) -> Table {
             }
         }
         table.rows.push(row);
-    }  
+    }
 
     table
 }
