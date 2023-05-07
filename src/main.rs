@@ -4,6 +4,7 @@ use std::io::Read;
 use std::fs::{File, OpenOptions};
 use std::fs;
 use std::fmt;
+use std::path::Path;
 use std::process::exit;
 
 mod tests;
@@ -335,7 +336,12 @@ fn table_name_check(name: WordType, database: &Database) -> Result<usize, String
     Ok(table_idx)
 }
 
-fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
+fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, String> {
+    let query = match parse_query(query) {
+        Err(err) => return Err(err),
+        Ok(query) => query,
+    };
+
     let mut words: Vec<(DataType, WordType)> = vec![];
     // TODO: Come up with better solution for this
     let mut conditions: Vec<(Option<WordType>, Option<(DataType, WordType)>, Op)> = vec![];
@@ -344,17 +350,13 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
         match op {
             Op::Select => {
                 if words.len() == 0 {
-                    eprintln!("ERROR: no arguments provided for `select` operation");
-                    return None;
+                    return Err("ERROR: no arguments provided for `select` operation".to_string());
                 }
                 let mut row_idxs = vec![];
                 let mut words_iter = words.iter();
                 let table_idx = match table_name_check(words[0].1.clone(), &database) {
                     Ok(idx) => idx,
-                    Err(err) => {
-                        eprintln!("{}", err);
-                        return None;
-                    },
+                    Err(err) => return Err(err),
                 };
                 
                 words_iter.next();
@@ -372,13 +374,9 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                                     continue 'outer;
                                 }
                             }
-                            eprintln!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[table_idx].schema.name);
-                            return None;
+                            return Err(format!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[table_idx].schema.name));
                         },
-                        _ => {
-                            eprintln!("ERROR: `select` operation can operate only strings");
-                            return None;
-                        }
+                        _ => return Err("ERROR: `select` operation can operate only strings".to_string()),
                     }
                 }
 
@@ -411,30 +409,24 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
             },
             Op::Insert => {
                 if words.len() < 1 {
-                    eprintln!("ERROR: table name not provided for `insert` operation");
-                    return None;
+                    return Err("ERROR: table name not provided for `insert` operation".to_string());
                 }
                 
                 let table_idx = match table_name_check(words[0].1.clone(), &database) {
                     Ok(idx) => idx,
-                    Err(err) => {
-                        eprintln!("{}", err);
-                        return None;
-                    },
+                    Err(err) => return Err(err),
                 };
                 
                 let words_slice = &words[1..];
                 let col_count = database.tables[table_idx].schema.cols.len(); 
                 if words_slice.len() < col_count {
-                    eprintln!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words_slice.len(), col_count);
-                    return None;
+                    return Err(format!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words_slice.len(), col_count));
                 }
 
                 for (i, word) in words_slice[words_slice.len() - col_count..words_slice.len()].iter().enumerate() {
                     let col_data_type = database.tables[table_idx].schema.cols[i].data_type;
                     if word.0 != col_data_type {
-                        eprintln!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, col_data_type);
-                        return None;
+                        return Err(format!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, col_data_type));
                     }
                 }
 
@@ -447,16 +439,12 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
             },
             Op::Delete => {
                 if words.len() < 1 {
-                    eprintln!("ERROR: table name not provided for `delete` operation");
-                    return None;
+                    return Err("ERROR: table name not provided for `delete` operation".to_string());
                 }
                 
                 let table_idx = match table_name_check(words[0].1.clone(), &database) {
                     Ok(idx) => idx,
-                    Err(err) => {
-                        eprintln!("{}", err);
-                        return None;
-                    },
+                    Err(err) => return Err(err),
                 };
                 
                 let mut rows_to_delete = vec![];
@@ -471,10 +459,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         _ => {
                             match logical_op_check(condition.2.clone(), condition.0.clone().unwrap(), condition.1.clone().unwrap(), &database.tables[table_idx]) {
                                 Ok(condition) => comp_conds.push(condition),
-                                Err(err) => {
-                                    eprintln!("{}", err);
-                                    return None;
-                                },
+                                Err(err) => return Err(err),
                             }
                         }
                     }
@@ -486,8 +471,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         match &condition.op {
                             Op::And => {
                                 if cond_stack.len() < 2 {
-                                    eprintln!("ERROR: not enaugh arguments for `and` operation");
-                                    return None;
+                                    return Err("ERROR: not enaugh arguments for `and` operation".to_string());
                                 }
 
                                 let a = cond_stack.pop().unwrap();
@@ -496,8 +480,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                             },
                             Op::Or => {
                                 if cond_stack.len() < 2 {
-                                    eprintln!("ERROR: not enaugh arguments for `or` operation");
-                                    return None;
+                                    return Err("ERROR: not enaugh arguments for `or` operation".to_string());
                                 }
 
                                 let a = cond_stack.pop().unwrap();
@@ -510,8 +493,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         }
                     }
                     if cond_stack.len() != 1 {
-                        eprintln!("ERROR: conditions stack expect to have one element, but have {}", cond_stack.len());
-                        return None;
+                        return Err(format!("ERROR: conditions stack expect to have one element, but have {}", cond_stack.len()));
                     } 
                     if cond_stack.pop().unwrap() {
                         rows_to_delete.push(i);
@@ -525,13 +507,11 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                 }       
                 conditions.clear();
             },
+            // TODO: filter can't operate on columns that not in temp_table
             Op::Filter => {
                 let mut temp_table = match temp_table {
                     Some(ref mut table) => table,
-                    None => { 
-                        eprintln!("ERROR: `filter-and` operation must be used with `select` operation");
-                        return None;
-                    },
+                    None => return Err("ERROR: `filter-and` operation must be used with `select` operation".to_string()),
                 };
                 
                 let mut comp_conds = vec![]; 
@@ -545,10 +525,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         _ => {
                             match logical_op_check(condition.2.clone(), condition.0.clone().unwrap(), condition.1.clone().unwrap(), &temp_table) {
                                 Ok(condition) => comp_conds.push(condition),
-                                Err(err) => {
-                                    eprintln!("{}", err);
-                                    return None;
-                                },
+                                Err(err) => return Err(err),
                             }
                         }
                     }
@@ -560,8 +537,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         match &condition.op {
                             Op::And => {
                                 if cond_stack.len() < 2 {
-                                    eprintln!("ERROR: not enaugh arguments for `and` operation");
-                                    return None;
+                                    return Err("ERROR: not enaugh arguments for `and` operation".to_string());
                                 }
 
                                 let a = cond_stack.pop().unwrap();
@@ -570,8 +546,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                             },
                             Op::Or => {
                                 if cond_stack.len() < 2 {
-                                    eprintln!("ERROR: not enaugh arguments for `or` operation");
-                                    return None;
+                                    return Err("ERROR: not enaugh arguments for `or` operation".to_string());
                                 }
 
                                 let a = cond_stack.pop().unwrap();
@@ -584,8 +559,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                         }
                     }
                     if cond_stack.len() != 1 {
-                        eprintln!("ERROR: conditions stack expect to have one element, but have {}", cond_stack.len());
-                        return None;
+                        return Err(format!("ERROR: conditions stack expect to have one element, but have {}", cond_stack.len()));
                     } 
                     if cond_stack.pop().unwrap() {
                         filtered_rows.push(row.clone());
@@ -606,8 +580,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                 };
 
                 if words.len() < 2 {
-                    eprintln!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len());
-                    return None;
+                    return Err(format!("ERROR: not enough arguments for `{op_sym}` operation, provided {0} but needed 2", words.len()));
                 }
 
                 conditions.push((
@@ -622,16 +595,12 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
             },
             Op::Create => {
                 if words.len() == 0 {
-                    eprintln!("ERROR: no arguments provided for `create` operation");
-                    return None;
+                    return Err("ERROR: no arguments provided for `create` operation".to_string());
                 }
 
                 let table_name = match &words[0].1 {
                     WordType::Str(name) => name.clone(),
-                    other => {
-                        eprintln!("ERROR: name of the table expected to be a string but found `{:?}`", other);
-                        return None;
-                    },
+                    other => return Err(format!("ERROR: name of the table expected to be a string but found `{:?}`", other)),
                 };
 
                 let mut words_iter = words.iter();
@@ -640,26 +609,17 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
                 while let Some(word) = words_iter.next() {
                     let col_name = match &word.1 {
                         WordType::Str(name) => name.clone(),
-                        other => {
-                            eprintln!("ERROR: name of the column expected to be a string but found `{:?}`", other);
-                            return None;
-                        },
+                        other => return Err(format!("ERROR: name of the column expected to be a string but found `{:?}`", other)),
                     };
 
                     let col_type = match words_iter.next() {
                         Some(data_type) => data_type,
-                        None => {
-                            eprintln!("ERROR: column type is not provided");
-                            return None;
-                        },
+                        None => return Err("ERROR: column type is not provided".to_string()),
                     };
 
                     let col_type = match &col_type.1 {
                         WordType::Type(data_type) => data_type,
-                        other => {
-                            eprintln!("ERROR: unknown column type '{:?}' in `create` operation", other);
-                            return None;
-                        },
+                        other => return Err(format!("ERROR: unknown column type '{:?}' in `create` operation", other)),
                     };
 
                     cols.push(Col {name: col_name, data_type: col_type.clone()});
@@ -676,32 +636,30 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
             },
             Op::Drop => {
                 if words.len() < 1 {
-                    eprintln!("ERROR: no arguments provided for `drop` operation");
-                    return None;
+                    return Err("ERROR: no arguments provided for `drop` operation".to_string());
                 }
 
                 let table_idx = match table_name_check(words[0].1.clone(), &database) {
                     Ok(idx) => idx,
-                    Err(err) => {
-                        eprintln!("{}", err);
-                        return None;
-                    },
+                    Err(err) => return Err(err),
                 };
                 let table_name = database.tables[table_idx].schema.name.clone();
 
                 database.tables.remove(table_idx);
                 words.pop();
 
-                let table_file = format!("{}/{}.tbl", database.path, table_name);  
-                if let Err(err) = fs::remove_file(table_file.clone()) {
-                    eprintln!("ERROR: can't delete database file {}: {}", table_file, err);
-                    return None;
-                };
+                let table_file = format!("{}/{}.tbl", database.path, table_name);
+                if Path::new(&table_file).exists() {
+                    if let Err(err) = fs::remove_file(table_file.clone()) {
+                        return Err(format!("ERROR: can't delete database file {}: {}", table_file, err));
+                    };
+                }
                 let schema_file = format!("{}/{}.tbls", database.path, table_name);  
-                if let Err(err) = fs::remove_file(schema_file.clone()) {
-                    eprintln!("ERROR: can't delete database file {}: {}", schema_file, err);
-                    return None;
-                };
+                if Path::new(&schema_file).exists() {
+                    if let Err(err) = fs::remove_file(schema_file.clone()) {
+                        return Err(format!("ERROR: can't delete database file {}: {}", schema_file, err));
+                    };
+                }
             },
             Op::PushWord{data_type, word_type} => {
                 words.push((data_type.clone(), word_type.clone())); 
@@ -717,7 +675,7 @@ fn execute_query(query: &Vec<Op>, database: &mut Database) -> Option<Table> {
         eprintln!("WARNING: {0} unused conditions in the conditions stack", conditions.len());
     }
     
-    temp_table
+    Ok(temp_table)
 }
 
 fn read_from_file(dir: &str, schema: TableSchema) -> Table {
@@ -951,13 +909,11 @@ fn main() {
                 match query.as_str().trim() {
                     "exit" => mode = Mode::Cmd,
                     _ => {
-                        match parse_query(query.as_str()) {
-                            Ok(tokens) => {
-                                if let Some(result_table) = execute_query(&tokens, &mut database) {
-                                    print!("{result_table}");
-                                }
+                        match execute_query(query.as_str(), &mut database) {
+                            Ok(table) => if let Some(table) = table {
+                                print!("{table}")
                             },
-                            Err(err) => eprintln!("{}", err),
+                            Err(err)  => eprintln!("{}", err),
                         }
                     },
                 }

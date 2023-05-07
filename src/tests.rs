@@ -204,9 +204,8 @@ mod tests {
             path: String::new(),
             tables: vec![],
         }; 
-        let tokens = parse_query(query).unwrap();
-        let result = execute_query(&tokens, &mut database);
-        assert!(result.is_none());
+        let result = execute_query(query, &mut database);
+        assert!(result == Ok(None));
         assert!(database.tables.len() == 1);
         let expected = Table {
             schema: TableSchema {
@@ -237,10 +236,70 @@ mod tests {
                 },
             ],
         }; 
-        let tokens = parse_query(query).unwrap();
-        let result = execute_query(&tokens, &mut database);
-        assert!(result.is_none());
+        let result = execute_query(query, &mut database);
+        assert!(result == Ok(None));
         assert!(database.tables.len() == 0);
+    }
+
+    #[test]
+    fn select_and_insert() {
+        let mut database = Database {
+            name: "database".to_string(),
+            path: String::new(),
+            tables: vec![],
+        };
+
+        assert!(execute_query("clients id Int name Str age Int create", &mut database) == Ok(None));
+        assert!(execute_query("clients 0 John 20 insert", &mut database) == Ok(None));
+        assert!(execute_query("clients 1 Emily 25 insert", &mut database) == Ok(None));
+        assert!(execute_query("clients 2 Alex 19 insert", &mut database) == Ok(None));
+
+        let expected = Table {
+            schema: TableSchema {
+                name: "temp".to_string(),
+                cols: vec![
+                    Col {name: "id".to_string(), data_type: DataType::Int},
+                    Col {name: "name".to_string(), data_type: DataType::Str},
+                    Col {name: "age".to_string(), data_type: DataType::Int},
+                ],
+            },
+            rows: vec![
+                vec![WordType::Int(0), WordType::Str("John".to_string()), WordType::Int(20)],
+                vec![WordType::Int(1), WordType::Str("Emily".to_string()), WordType::Int(25)],
+                vec![WordType::Int(2), WordType::Str("Alex".to_string()), WordType::Int(19)],
+            ],
+        };
+
+        assert!(expected == execute_query("clients * select", &mut database).unwrap().unwrap());
+    }
+
+    #[test]
+    fn select_with_filter() {
+        let mut database = Database {
+            name: "database".to_string(),
+            path: String::new(),
+            tables: vec![],
+        };
+
+        assert!(execute_query("clients id Int name Str age Int create", &mut database) == Ok(None));
+        assert!(execute_query("clients 0 John 20 insert", &mut database) == Ok(None));
+        assert!(execute_query("clients 1 John 25 insert", &mut database) == Ok(None));
+        assert!(execute_query("clients 2 Alex 20 insert", &mut database) == Ok(None));
+
+        let expected = Table {
+            schema: TableSchema {
+                name: "temp".to_string(),
+                cols: vec![
+                    Col {name: "id".to_string(), data_type: DataType::Int},
+                    Col {name: "name".to_string(), data_type: DataType::Str},
+                ],
+            },
+            rows: vec![
+                vec![WordType::Int(1), WordType::Str("John".to_string())],
+            ],
+        };
+
+        assert!(expected == execute_query("clients id name select name John == id 1 == and filter", &mut database).unwrap().unwrap());
     }
 
     #[test]
