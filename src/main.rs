@@ -345,6 +345,7 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
     let mut temp_table = None;
     for op in query {
         match op {
+            // TODO: `select` shouldn't work with 0 columns
             Op::Select => {
                 if words.len() == 0 {
                     return Err("ERROR: no arguments provided for `select` operation".to_string());
@@ -586,45 +587,41 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                 conditions.push((None, None, op.clone()));
             },
             Op::Create => {
-                if words.len() == 0 {
-                    return Err("ERROR: no arguments provided for `create` operation".to_string());
-                }
-
-                let table_name = match &words[0].1 {
-                    WordType::Str(name) => name.clone(),
-                    other => return Err(format!("ERROR: name of the table expected to be a string but found `{:?}`", other)),
+                let table_name = match words.pop() {
+                    Some(word) => {
+                        match word.1 {
+                            WordType::Str(name) => name.clone(),
+                            other => return Err(format!("ERROR: name of the table expected to be a string but found `{:?}`", other)),
+                        }
+                    },
+                    None => return Err("ERROR: table name not provided for `create` operation".to_string()),
                 };
 
-                let mut words_iter = words.iter();
-                words_iter.next();
                 let mut cols = vec![];
-                while let Some(word) = words_iter.next() {
-                    let col_name = match &word.1 {
-                        WordType::Str(name) => name.clone(),
-                        other => return Err(format!("ERROR: name of the column expected to be a string but found `{:?}`", other)),
-                    };
-
-                    let col_type = match words_iter.next() {
-                        Some(data_type) => data_type,
-                        None => return Err("ERROR: column type is not provided".to_string()),
-                    };
-
-                    let col_type = match &col_type.1 {
+                while let Some(word) = words.pop() {
+                    let col_type = match word.1 {
                         WordType::Type(data_type) => data_type,
                         other => return Err(format!("ERROR: unknown column type '{:?}' in `create` operation", other)),
                     };
-
+                    let col_name = match words.pop() {
+                        Some(word) => {
+                            match word.1 {
+                                WordType::Str(name) => name.clone(),
+                                other => return Err(format!("ERROR: name of the column expected to be a string but found `{:?}`", other)),
+                            }
+                        },
+                        None => return Err("ERROR: column name not provided".to_string()),
+                    };
                     cols.push(Col {name: col_name, data_type: col_type.clone()});
                 }
 
                 database.tables.push(Table {
                     schema: TableSchema {
                         name: table_name,
-                        cols: cols,
+                        cols: cols.into_iter().rev().collect(),
                     },
                     rows: vec![],
                 });
-                words.clear();
             },
             Op::Drop => {
                 if words.len() < 1 {

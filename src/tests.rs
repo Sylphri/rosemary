@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn create_table() {
-        let query = "clients (id Int) (name Str) create";
+        let query = "id Int name Str clients create";
         let mut database = Database {
             name: "database".to_string(),
             path: String::new(),
@@ -248,7 +248,7 @@ mod tests {
             tables: vec![],
         };
 
-        assert!(execute_query("clients id Int name Str age Int create", &mut database) == Ok(None));
+        assert!(execute_query("id Int name Str age Int clients create", &mut database) == Ok(None));
         assert!(execute_query("0 John 20 clients insert", &mut database) == Ok(None));
         assert!(execute_query("1 Emily 25 clients insert", &mut database) == Ok(None));
         assert!(execute_query("2 Alex 19 clients insert", &mut database) == Ok(None));
@@ -280,7 +280,7 @@ mod tests {
             tables: vec![],
         };
 
-        assert!(execute_query("clients id Int name Str age Int create", &mut database) == Ok(None));
+        assert!(execute_query("id Int name Str age Int clients create", &mut database) == Ok(None));
         assert!(execute_query("0 John 20 clients insert", &mut database) == Ok(None));
         assert!(execute_query("1 John 25 clients insert", &mut database) == Ok(None));
         assert!(execute_query("2 Alex 20 clients insert", &mut database) == Ok(None));
