@@ -249,9 +249,9 @@ mod tests {
         };
 
         assert!(execute_query("clients id Int name Str age Int create", &mut database) == Ok(None));
-        assert!(execute_query("clients 0 John 20 insert", &mut database) == Ok(None));
-        assert!(execute_query("clients 1 Emily 25 insert", &mut database) == Ok(None));
-        assert!(execute_query("clients 2 Alex 19 insert", &mut database) == Ok(None));
+        assert!(execute_query("0 John 20 clients insert", &mut database) == Ok(None));
+        assert!(execute_query("1 Emily 25 clients insert", &mut database) == Ok(None));
+        assert!(execute_query("2 Alex 19 clients insert", &mut database) == Ok(None));
 
         let expected = Table {
             schema: TableSchema {
@@ -281,9 +281,9 @@ mod tests {
         };
 
         assert!(execute_query("clients id Int name Str age Int create", &mut database) == Ok(None));
-        assert!(execute_query("clients 0 John 20 insert", &mut database) == Ok(None));
-        assert!(execute_query("clients 1 John 25 insert", &mut database) == Ok(None));
-        assert!(execute_query("clients 2 Alex 20 insert", &mut database) == Ok(None));
+        assert!(execute_query("0 John 20 clients insert", &mut database) == Ok(None));
+        assert!(execute_query("1 John 25 clients insert", &mut database) == Ok(None));
+        assert!(execute_query("2 Alex 20 clients insert", &mut database) == Ok(None));
 
         let expected = Table {
             schema: TableSchema {

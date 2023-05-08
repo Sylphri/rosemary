@@ -465,34 +465,30 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                 words.clear();
             },
             Op::Insert => {
-                if words.len() < 1 {
-                    return Err("ERROR: table name not provided for `insert` operation".to_string());
-                }
-                
-                let table_idx = match table_name_check(words[0].1.clone(), &database) {
-                    Ok(idx) => idx,
-                    Err(err) => return Err(err),
+                let table_idx = match words.pop() {
+                    Some(word) => {
+                        match table_name_check(word.1.clone(), &database) {
+                            Ok(idx) => idx,
+                            Err(err) => return Err(err),
+                        }
+                    },
+                    None => return Err("ERROR: table name not provided for `insert` operation".to_string()),
                 };
-                
-                let words_slice = &words[1..];
-                let col_count = database.tables[table_idx].schema.cols.len(); 
-                if words_slice.len() < col_count {
-                    return Err(format!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", words_slice.len(), col_count));
-                }
-
-                for (i, word) in words_slice[words_slice.len() - col_count..words_slice.len()].iter().enumerate() {
-                    let col_data_type = database.tables[table_idx].schema.cols[i].data_type;
-                    if word.0 != col_data_type {
-                        return Err(format!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word, col_data_type));
+                let table = &mut database.tables[table_idx];
+                let cols = &table.schema.cols;
+                let mut row = vec![];
+                for i in (0..cols.len()).rev() {
+                    match words.pop() {
+                        Some(word) => {
+                            if word.0 != cols[i].data_type {
+                                return Err(format!("ERROR: argument type don't match the column type, argumnet {0:?}, column {1:?}", word.0, cols[i].data_type));
+                            }
+                            row.push(word.1.clone());
+                        },
+                        None => return Err(format!("ERROR: not enaugh arguments for `insert` operation, provided {0} but needed {1}", cols.len() - i - 1, cols.len())),
                     }
                 }
-
-                database.tables[table_idx].rows.push(
-                    words_slice[words_slice.len() - col_count..words_slice.len()]
-                    .iter()
-                    .map(|x| x.1.clone())
-                    .collect::<Vec<WordType>>());
-                words.clear();
+                table.rows.push(row.into_iter().rev().collect());
             },
             Op::Delete => {
                 if words.len() < 1 {
