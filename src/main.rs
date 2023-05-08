@@ -345,38 +345,44 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
     let mut temp_table = None;
     for op in query {
         match op {
-            // TODO: `select` shouldn't work with 0 columns
             Op::Select => {
-                if words.len() == 0 {
-                    return Err("ERROR: no arguments provided for `select` operation".to_string());
-                }
-                let mut row_idxs = vec![];
-                let mut words_iter = words.iter();
-                let table_idx = match table_name_check(words[0].1.clone(), &database) {
-                    Ok(idx) => idx,
-                    Err(err) => return Err(err),
+                let table_idx = match words.pop() {
+                    Some(word) => {
+                        match table_name_check(word.1.clone(), &database) {
+                            Ok(idx) => idx,
+                            Err(err) => return Err(err),
+                        }
+                    },
+                    None => return Err("ERROR: table name not provided for `select` operation".to_string()),
                 };
                 
-                words_iter.next();
-                'outer: for (_, word) in words_iter {
-                    match word {
+                let mut row_idxs = vec![];
+                'outer: while let Some(word) = words.pop() {
+                    match word.1 {
                         WordType::Str(value) => {
                             if value == "*" {
-                                row_idxs.append(&mut (0..database.tables[table_idx].schema.cols.len()).collect::<Vec<usize>>());
+                                row_idxs.append(&mut (0..database.tables[table_idx].schema.cols.len()).rev().collect::<Vec<usize>>());
                                 continue;
                             }
 
                             for (i, Col {name, ..}) in database.tables[table_idx].schema.cols.iter().enumerate() {
-                                if name == value {
+                                if *name == value {
                                     row_idxs.push(i);
                                     continue 'outer;
                                 }
                             }
                             return Err(format!("ERROR: non existing column `{0}` in table `{1}`", value, database.tables[table_idx].schema.name));
                         },
-                        _ => return Err("ERROR: `select` operation can operate only strings".to_string()),
+                        _ => {
+                            words.push(word);
+                            break;
+                        },
                     }
                 }
+                if row_idxs.len() == 0 {
+                    return Err("ERROR: `select` operation need at least one column".to_string());
+                }
+                row_idxs = row_idxs.into_iter().rev().collect();
 
                 let mut schema = TableSchema {
                     name: String::from("temp"),
@@ -387,14 +393,9 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                     schema.cols.push(database.tables[table_idx].schema.cols[*idx].clone());
                 }
 
-                temp_table = Some(Table {
+                let mut table = Table {
                     schema,
                     rows: vec![],
-                });
-
-                let temp_table = match temp_table {
-                    Some(ref mut table) => table,
-                    None => unreachable!(),
                 };
                 
                 if conditions.len() > 0 {
@@ -451,7 +452,7 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                             for idx in &row_idxs {
                                 temp_row.push(row[*idx].clone());
                             }
-                            temp_table.rows.push(temp_row);
+                            table.rows.push(temp_row);
                         } 
                     }
                 } else {
@@ -460,10 +461,10 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                         for idx in &row_idxs {
                             temp_row.push(row[*idx].clone());
                         }
-                        temp_table.rows.push(temp_row);
+                        table.rows.push(temp_row);
                     }
                 }
-                words.clear();
+                temp_table = Some(table);
             },
             Op::Insert => {
                 let table_idx = match words.pop() {
@@ -492,15 +493,15 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                 table.rows.push(row.into_iter().rev().collect());
             },
             Op::Delete => {
-                if words.len() < 1 {
-                    return Err("ERROR: table name not provided for `delete` operation".to_string());
-                }
-                
-                let table_idx = match table_name_check(words[words.len() - 1].1.clone(), &database) {
-                    Ok(idx) => idx,
-                    Err(err) => return Err(err),
+                let table_idx = match words.pop() {
+                    Some(word) => {
+                        match table_name_check(word.1.clone(), &database) {
+                            Ok(idx) => idx,
+                            Err(err) => return Err(err),
+                        }
+                    },
+                    None => return Err("ERROR: table name not provided for `delete` operation".to_string()),
                 };
-                words.pop();
                 
                 let mut rows_to_delete = vec![];
                 let mut comp_conds = vec![]; 
@@ -601,7 +602,10 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                 while let Some(word) = words.pop() {
                     let col_type = match word.1 {
                         WordType::Type(data_type) => data_type,
-                        other => return Err(format!("ERROR: unknown column type '{:?}' in `create` operation", other)),
+                        _ => {
+                            words.push(word);
+                            break;
+                        },
                     };
                     let col_name = match words.pop() {
                         Some(word) => {
@@ -624,18 +628,18 @@ fn execute_query(query: &str, database: &mut Database) -> Result<Option<Table>, 
                 });
             },
             Op::Drop => {
-                if words.len() < 1 {
-                    return Err("ERROR: no arguments provided for `drop` operation".to_string());
-                }
-
-                let table_idx = match table_name_check(words[0].1.clone(), &database) {
-                    Ok(idx) => idx,
-                    Err(err) => return Err(err),
+                let table_idx = match words.pop() {
+                    Some(word) => {
+                        match table_name_check(word.1.clone(), &database) {
+                            Ok(idx) => idx,
+                            Err(err) => return Err(err),
+                        }
+                    },
+                    None => return Err("ERROR: table name not provided for `drop` operation".to_string()),
                 };
+                
                 let table_name = database.tables[table_idx].schema.name.clone();
-
                 database.tables.remove(table_idx);
-                words.pop();
 
                 let table_file = format!("{}/{}.tbl", database.path, table_name);
                 if Path::new(&table_file).exists() {

@@ -269,7 +269,7 @@ mod tests {
             ],
         };
 
-        assert!(expected == execute_query("clients * select", &mut database).unwrap().unwrap());
+        assert!(expected == execute_query("* clients select", &mut database).unwrap().unwrap());
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
             ],
         };
 
-        assert!(expected == execute_query("name John == id 1 == and clients id name select", &mut database).unwrap().unwrap());
+        assert!(expected == execute_query("name John == id 1 == and id name clients select", &mut database).unwrap().unwrap());
     }
 
     #[test]
